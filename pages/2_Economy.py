@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 
-st.set_page_config(page_title="Economy", page_icon="🌎", layout="wide")
+st.set_page_config(page_title="Economy", layout="wide")
 
 issuer_name = st.session_state.get("issuer_name", "City of Elk Grove")
 
