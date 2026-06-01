@@ -1,1 +1,8 @@
 streamlit
+pandas
+numpy
+openpyxl
+plotly
+pydantic
+openai
+python-dotenv
