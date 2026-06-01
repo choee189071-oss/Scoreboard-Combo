@@ -6,7 +6,7 @@ st.set_page_config(page_title="Scoreboard", page_icon="📊", layout="wide")
 issuer_name = st.session_state.get("issuer_name", "City of Elk Grove")
 bond_strategy = st.session_state.get("bond_strategy", "S&P Local Government ICR")
 
-st.title("📊 Scoreboard Dashboard")
+st.title("Scoreboard Dashboard")
 st.markdown(f"**Bond Strategy:** {bond_strategy}  \n**Issuer:** {issuer_name}")
 
 st.divider()
