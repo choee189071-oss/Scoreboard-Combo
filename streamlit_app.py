@@ -2,168 +2,173 @@ import streamlit as st
 import pandas as pd
 
 st.set_page_config(
-    page_title="Municipal Rating Platform",
+    page_title="Municipal Credit Scoreboard",
     page_icon="🏛️",
     layout="wide"
 )
 
 # -----------------------------
-# Sample Data: City of Elk Grove
+# Session State
 # -----------------------------
 
-issuer = "City of Elk Grove"
-sector = "Local Government"
-current_icr = "N/A"
-current_outlook = "N/A"
+if "started" not in st.session_state:
+    st.session_state.started = False
 
-scorecard_data = pd.DataFrame({
-    "Factor": [
-        "Economy",
-        "Financial Performance",
-        "Reserves and Liquidity",
-        "Management",
-        "Debt & Liabilities"
-    ],
-    "Score": [2.00, 1.00, 1.00, 2.00, 1.25],
-    "Weight": ["20%", "20%", "20%", "20%", "20%"],
-    "Weighted Score": [0.40, 0.20, 0.20, 0.40, 0.25],
-    "Background / Statistic": [
-        "Real GCP per capita of 96% of U.S. real GDP per capita; County nominal PCPI of 95% of U.S. nominal PCPI",
-        "Median 3-year operating result of 33% of revenues",
-        "Available reserves of 47% of revenues; formal budget-based reserve targets established",
-        "Realistic budgets and standard planning techniques; culture of long-term planning and basic policies with regular reporting",
-        "Current cost for debt service and liabilities is ~5% of revenues; net direct debt per capita of ~$500; NPL per capita of $126"
-    ]
-})
+if "bond_type" not in st.session_state:
+    st.session_state.bond_type = None
 
-weighted_average_score = round(scorecard_data["Weighted Score"].sum(), 2)
-indicative_icr = "AA+"
-indicative_gf_rating = "AA"
+if "issuer_name" not in st.session_state:
+    st.session_state.issuer_name = ""
 
 # -----------------------------
-# Header
+# Home Page
 # -----------------------------
 
-st.title("🏛️ S&P Local Government ICR Bond Rating Scorecard")
+if not st.session_state.started:
+    st.title("🏛️ Municipal Credit Scoreboard Platform")
 
-with st.container():
-    col1, col2, col3, col4 = st.columns(4)
+    st.markdown("### Start a New Credit Assessment")
 
-    col1.metric("Sector", sector)
-    col2.metric("Issuer", issuer)
-    col3.metric("Current ICR", current_icr)
-    col4.metric("Current Outlook", current_outlook)
-
-st.divider()
-
-# -----------------------------
-# Section 1: Scorecard Summary
-# -----------------------------
-
-st.subheader("1. Scorecard Summary")
-
-col_a, col_b, col_c = st.columns([2.3, 1, 1])
-
-with col_a:
-    st.dataframe(
-        scorecard_data,
-        use_container_width=True,
-        hide_index=True
+    bond_type = st.selectbox(
+        "Select Bond Credit Type",
+        [
+            "Local Government Bond",
+            "Special Assessment Bond",
+            "Revenue Bond",
+            "School District Bond",
+            "Utility Revenue Bond"
+        ]
     )
 
-with col_b:
-    st.metric("Weighted Average Score", weighted_average_score)
-    st.metric("Indicative ICR", indicative_icr)
-
-with col_c:
-    st.metric("Indicative General Fund Rating", indicative_gf_rating)
-    st.info("This is an indicative scorecard output based on the current methodology inputs.")
-
-st.divider()
-
-# -----------------------------
-# Section 2: Individual Credit Profile
-# -----------------------------
-
-st.subheader("2. Individual Credit Profile")
-
-icp_data = scorecard_data[["Factor", "Score", "Weighted Score"]].copy()
-icp_data.insert(1, "Weight", ["20%", "20%", "20%", "20%", "20%"])
-
-col1, col2 = st.columns([1.4, 1])
-
-with col1:
-    st.dataframe(
-        icp_data,
-        use_container_width=True,
-        hide_index=True
+    issuer_name = st.text_input(
+        "Issuer Name",
+        placeholder="e.g., City of Elk Grove"
     )
 
-with col2:
-    st.metric("Individual Credit Profile", weighted_average_score)
+    if st.button("Start Scorecard"):
+        if issuer_name.strip() == "":
+            st.warning("Please enter an issuer name.")
+        else:
+            st.session_state.bond_type = bond_type
+            st.session_state.issuer_name = issuer_name
+            st.session_state.started = True
+            st.rerun()
 
-    st.markdown("""
-    **Interpretation**
+# -----------------------------
+# Local Government Scoreboard
+# -----------------------------
 
-    - Lower scores indicate stronger credit quality.
-    - Financial Performance and Reserves are major credit strengths.
-    - Management is slightly weaker relative to other factors.
+else:
+    st.title("S&P Local Government ICR Bond Rating Scorecard")
+
+    st.markdown(f"""
+    **Bond Credit Type:** {st.session_state.bond_type}  
+    **Issuer:** {st.session_state.issuer_name}
     """)
 
-st.divider()
+    if st.button("← Back to Home"):
+        st.session_state.started = False
+        st.rerun()
 
-# -----------------------------
-# Section 3: Anchor Matrix
-# -----------------------------
+    st.divider()
 
-st.subheader("3. Anchor Matrix")
+    # Dynamic Template Table
+    st.subheader("1. Scorecard Template")
 
-anchor_matrix = pd.DataFrame({
-    "IF Assessment": [1, 2, 3],
-    "ICP 1.0": ["AAA", "AAA", "AAA"],
-    "ICP 1.5": ["AAA", "AA+", "AA"],
-    "ICP 2.0": ["AA+", "AA", "AA-"],
-    "ICP 2.5": ["AA", "AA-", "A+"],
-    "ICP 3.0": ["AA-", "A+", "A"],
-    "ICP 3.5": ["A+", "A", "A-"],
-    "ICP 4.0": ["A", "A-", "BBB"],
-    "ICP 4.5": ["A-", "BBB+", "BBB"],
-    "ICP 5.0": ["BBB", "BBB-", "BB+"],
-    "ICP 5.5": ["BB+", "BB", "BB-"],
-    "ICP 6.0": ["BB", "B+", "B"]
-})
+    scorecard_data = pd.DataFrame({
+        "Factor": [
+            "Economy",
+            "Financial Performance",
+            "Reserves and Liquidity",
+            "Management",
+            "Debt & Liabilities"
+        ],
+        "Score": [None, None, None, None, None],
+        "Weight": [0.20, 0.20, 0.20, 0.20, 0.20],
+        "Weighted Score": [None, None, None, None, None],
+        "Background / Statistic": [
+            "",
+            "",
+            "",
+            "",
+            ""
+        ]
+    })
 
-col_left, col_right = st.columns([2.2, 1])
+    edited_scorecard = st.data_editor(
+        scorecard_data,
+        use_container_width=True,
+        hide_index=True,
+        num_rows="fixed"
+    )
 
-with col_left:
+    # Calculate weighted score
+    try:
+        edited_scorecard["Weighted Score"] = (
+            edited_scorecard["Score"].astype(float)
+            * edited_scorecard["Weight"].astype(float)
+        )
+
+        weighted_average = edited_scorecard["Weighted Score"].sum()
+
+    except Exception:
+        weighted_average = None
+
+    st.divider()
+
+    # Result Summary
+    st.subheader("2. Indicative Rating Summary")
+
+    col1, col2, col3 = st.columns(3)
+
+    col1.metric(
+        "Weighted Average Score",
+        f"{weighted_average:.2f}" if weighted_average is not None else "N/A"
+    )
+
+    col2.metric("Indicative ICR", "To be mapped")
+
+    col3.metric("General Fund Rating", "To be mapped")
+
+    st.divider()
+
+    # Fixed Matrix
+    st.subheader("3. Individual Credit Profile Assessment")
+
+    anchor_matrix = pd.DataFrame({
+        "IF Assessment": [1, 2, 3],
+        "1": ["AAA", "AAA", "AA+"],
+        "1.5": ["AAA", "AA+", "AA"],
+        "2": ["AA+", "AA", "AA-"],
+        "2.5": ["AA", "AA-", "A+"],
+        "3": ["AA-", "A+", "A"],
+        "3.5": ["A+", "A", "A-"],
+        "4": ["A", "A-", "BBB"],
+        "4.5": ["A-", "BBB+", "BBB-"],
+        "5": ["BBB", "BBB-", "BB+"],
+        "5.5": ["BB+", "BB", "BB-"],
+        "6": ["BB-", "B+", "B"]
+    })
+
     st.dataframe(
         anchor_matrix,
         use_container_width=True,
         hide_index=True
     )
 
-with col_right:
-    st.metric("IF Assessment", "2")
-    st.metric("ICP Assessment", weighted_average_score)
-    st.metric("Mapped Rating", indicative_icr)
+    st.caption("Matrix can remain fixed for the methodology. The scorecard table above should remain dynamic.")
 
-    st.caption("*Illustrative anchor matrix based on current scorecard setup.*")
+    st.divider()
 
-st.divider()
+    st.subheader("4. Next Factor Sections")
 
-# -----------------------------
-# Next Step Placeholder
-# -----------------------------
+    st.markdown("""
+    After this overview, each factor should open into its own detail section:
 
-st.subheader("Next Steps")
-
-st.markdown("""
-After this overview page, each factor will have its own detailed page:
-
-- Economy
-- Financial Performance
-- Reserves and Liquidity
-- Management
-- Debt and Liabilities
-- Sources / Evidence Library
-""")
+    - Economy
+    - Financial Performance
+    - Reserves and Liquidity
+    - Management
+    - Debt and Liabilities
+    - Sources / Evidence
+    """)
