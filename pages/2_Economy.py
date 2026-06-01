@@ -36,6 +36,10 @@ gcp_pct_us = real_gcp_per_capita / us_real_gdp_per_capita
 pcpi_pct_us = regional_pcpi / us_pcpi
 
 
+# -----------------------------
+# Scoring Functions
+# -----------------------------
+
 def score_real_gcp(pct):
     pct = pct * 100
     if pct > 110:
@@ -71,64 +75,94 @@ pcpi_score = score_pcpi(pcpi_pct_us)
 economy_score = round((gcp_score + pcpi_score) / 2, 1)
 
 # -----------------------------
-# Summary Metrics
+# Summary
 # -----------------------------
 
 col1, col2, col3 = st.columns(3)
 
 col1.metric("Economy Score", f"{economy_score:.1f}")
-col2.metric("Real GCP per Capita / U.S.", f"{gcp_pct_us:.0%}")
-col3.metric("PCPI / U.S.", f"{pcpi_pct_us:.0%}")
+col2.metric("GCP Score", gcp_score)
+col3.metric("PCPI Score", pcpi_score)
 
 st.divider()
 
 # -----------------------------
-# Calculation Table
+# Part 1: Real Gross County Product
 # -----------------------------
 
-st.subheader("Economy Calculation")
+st.subheader("1. Real Gross County Product")
 
-economy_data = pd.DataFrame({
+gcp_table = pd.DataFrame({
     "Metric": [
         "Real Gross County Product",
         "Population",
         "Real GCP Per Capita",
-        "Real GCP Per Capita as % of U.S.",
-        "Real GCP Score",
-        "Per Capita Personal Income",
-        "PCPI as % of U.S.",
-        "PCPI Score"
+        "Real GCP Per Capita as % of U.S."
     ],
     regional_name: [
         f"{real_gcp:,.0f}",
         f"{population:,.0f}",
         f"{real_gcp_per_capita:,.0f}",
-        f"{gcp_pct_us:.0%}",
-        gcp_score,
-        f"{regional_pcpi:,.0f}",
-        f"{pcpi_pct_us:.0%}",
-        pcpi_score
+        f"{gcp_pct_us:.0%}"
     ],
     "U.S.": [
         f"{us_real_gdp:,.0f}",
         f"{us_population:,.0f}",
         f"{us_real_gdp_per_capita:,.0f}",
-        "100%",
-        "",
-        f"{us_pcpi:,.0f}",
-        "100%",
-        ""
+        "100%"
     ],
-    "Year": [
-        year, year, year, year, year, year, year, year
-    ]
+    "Year": [year, year, year, year]
 })
 
-st.dataframe(
-    economy_data,
-    use_container_width=True,
-    hide_index=True
-)
+left, right = st.columns([4, 1])
+
+with left:
+    st.dataframe(
+        gcp_table,
+        use_container_width=True,
+        hide_index=True
+    )
+
+with right:
+    st.metric("Assessment", gcp_score)
+    st.caption("Based on Real GCP per capita as % of U.S. real GDP per capita.")
+
+st.divider()
+
+# -----------------------------
+# Part 2: Personal Income
+# -----------------------------
+
+st.subheader("2. Per Capita Personal Income")
+
+pcpi_table = pd.DataFrame({
+    "Metric": [
+        "Per Capita Personal Income",
+        "PCPI as % of U.S."
+    ],
+    regional_name: [
+        f"{regional_pcpi:,.0f}",
+        f"{pcpi_pct_us:.0%}"
+    ],
+    "U.S.": [
+        f"{us_pcpi:,.0f}",
+        "100%"
+    ],
+    "Year": [year, year]
+})
+
+left, right = st.columns([4, 1])
+
+with left:
+    st.dataframe(
+        pcpi_table,
+        use_container_width=True,
+        hide_index=True
+    )
+
+with right:
+    st.metric("Assessment", pcpi_score)
+    st.caption("Based on county nominal PCPI as % of U.S. nominal PCPI.")
 
 st.divider()
 
@@ -136,7 +170,7 @@ st.divider()
 # Assessment Criteria
 # -----------------------------
 
-st.subheader("Assessment Criteria")
+st.subheader("3. Assessment Criteria")
 
 criteria = pd.DataFrame({
     "Metric": [
