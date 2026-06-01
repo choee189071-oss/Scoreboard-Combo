@@ -1,28 +1,15 @@
 import streamlit as st
 
-st.set_page_config(
-    page_title="Municipal Credit Platform",
-    page_icon="🏛️",
-    layout="wide"
-)
+st.set_page_config(page_title="Municipal Credit Platform", page_icon="🏛️", layout="wide")
 
 st.title("🏛️ Municipal Credit Platform")
 
 bond_strategy = st.selectbox(
     "Select Bond Strategy",
-    [
-        "S&P Local Government ICR",
-        "S&P Special Assessment",
-        "Moody's Local Government",
-        "Fitch Local Government",
-        "KBRA Local Government"
-    ]
+    ["S&P Local Government ICR", "S&P Special Assessment", "Moody's Local Government"]
 )
 
-issuer_name = st.text_input(
-    "Issuer Name",
-    placeholder="e.g., City of Elk Grove"
-)
+issuer_name = st.text_input("Issuer Name", placeholder="e.g., City of Elk Grove")
 
 if st.button("Start Scoreboard"):
     if not issuer_name.strip():
@@ -30,4 +17,4 @@ if st.button("Start Scoreboard"):
     else:
         st.session_state["bond_strategy"] = bond_strategy
         st.session_state["issuer_name"] = issuer_name
-        st.switch_page("pages/1_Scoreboard.py")
+        st.success("Saved. Please open **1 Scorecard** from the sidebar.")
