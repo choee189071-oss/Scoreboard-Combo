@@ -1,1 +1,53 @@
-
+field_name,field_category,preferred_source,fallback_source,automation_level,notes
+county_ebi,Economy,CensusACS,Manual,API,Raw local effective buying income or comparable local income input
+us_ebi,Economy,BEA,Manual,API,Raw national EBI or national income benchmark
+county_gdp_current,Economy,BEA,Manual,API,Raw current county GDP
+county_gdp_prior,Economy,BEA,Manual,API,Raw prior-period county GDP
+gdp_per_capita,Economy,BEA,Manual,API,Raw GDP per capita if provided directly by BEA
+county_gdp_per_capita,Economy,BEA,Manual,API,Raw county GDP per capita
+us_gdp_per_capita,Economy,BEA,Manual,API,Raw U.S. GDP per capita
+personal_income_per_capita,Economy,BEA,Manual,API,Raw personal income per capita
+local_personal_income_per_capita,Economy,BEA,Manual,API,Raw local personal income per capita
+us_personal_income_per_capita,Economy,BEA,Manual,API,Raw U.S. personal income per capita
+mhi_adjusted_rpp,Economy,CensusACS|BEA,Manual,API,Raw median household income adjusted by regional price parity
+us_median_income,Economy,CensusACS,Manual,API,Raw U.S. median household income
+issuer_mfi,Economy,CensusACS,Manual,API,Raw issuer-area median family income
+us_mfi,Economy,CensusACS,Manual,API,Raw U.S. median family income
+median_household_ebi,Economy,CensusACS,Manual,API,Raw median household income or EBI proxy
+population,Demographics,CensusACS,CreditScope,API,Raw population
+population_current,Demographics,CensusACS,Manual,API,Raw current population
+population_prior,Demographics,CensusACS,Manual,API,Raw prior-period population
+service_area_population,Demographics,CensusACS,CreditScope,API,Raw service area population
+poverty_rate,Demographics,CensusACS,Manual,API,Raw poverty rate
+fte_enrollment,Enrollment,IPEDS,CreditScope|AnnualReport,API,Raw FTE enrollment
+enrollment_current,Enrollment,IPEDS,CreditScope|AnnualReport,API,Raw current enrollment
+enrollment_3yr_prior,Enrollment,IPEDS,CreditScope|AnnualReport,API,Raw enrollment three years prior
+full_value,TaxBase,CreditScope,CountyAssessor|ACFR|OS,Upload,Raw full valuation / full value
+assessed_value_current,TaxBase,CreditScope,CountyAssessor|ACFR,Upload,Raw current assessed value
+assessed_value_prior,TaxBase,CreditScope,CountyAssessor|ACFR,Upload,Raw prior assessed value
+annual_utility_bill,Utility,OS,RateStudy|Manual,Document,Raw annual residential utility bill
+operating_revenue,Financial,CreditScope,ACFR,Upload,Raw operating revenue only
+operating_expense,Financial,CreditScope,ACFR,Upload,Raw operating expense only
+governmental_revenue,Financial,CreditScope,ACFR,Upload,Raw governmental revenue
+governmental_expense,Financial,CreditScope,ACFR,Upload,Raw governmental expense
+transfers,Financial,CreditScope,ACFR,Upload,Raw transfers in/out
+available_fund_balance,Financial,CreditScope,ACFR,Upload,Raw available fund balance
+committed_fund_balance,Financial,ACFR,CreditScope|Manual,Document,Raw committed fund balance
+assigned_fund_balance,Financial,ACFR,CreditScope|Manual,Document,Raw assigned fund balance
+unassigned_fund_balance,Financial,ACFR,CreditScope|Manual,Document,Raw unassigned fund balance
+fund_balance,Financial,CreditScope,ACFR,Upload,Raw fund balance
+net_cash,Financial,CreditScope,ACFR,Upload,Raw net cash
+cash,Financial,CreditScope,ACFR,Upload,Raw cash
+cash_and_investments,Financial,CreditScope,ACFR,Upload,Raw cash and investments
+net_assets,Financial,CreditScope,ACFR,Upload,Raw net assets / net position
+debt,Debt,CreditScope,ACFR|OS,Upload,Raw total debt
+long_term_debt,Debt,CreditScope,ACFR|OS,Upload,Raw long-term debt
+net_direct_debt,Debt,CreditScope,OS|ACFR,Upload,Raw net direct debt
+mads,Debt,OS,CreditScope|ACFR,Document,Raw maximum annual debt service
+debt_service,Debt,CreditScope,ACFR|OS,Upload,Raw annual debt service
+pension_cost,Pension,CreditScope,ACFR,Upload,Raw pension cost
+opeb_cost,OPEB,CreditScope,ACFR,Upload,Raw OPEB cost
+net_pension_liability,Pension,CreditScope,ACFR,Upload,Raw net pension liability
+adjusted_npl,Pension,MoodysPensionWorkbook,CreditScope|ACFR,Document,Raw adjusted net pension liability
+adjusted_opeb,OPEB,MoodysPensionWorkbook,CreditScope|ACFR,Document,Raw adjusted OPEB liability
+manual_score,Qualitative,Manual,RatingReport|AnalystInput,Manual,For qualitative factors only
