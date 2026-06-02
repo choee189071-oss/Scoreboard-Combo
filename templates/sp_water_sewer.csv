@@ -1,11 +1,11 @@
 section,factor,factor_weight,metric,metric_weight,formula_id,source_priority
-Enterprise Profile,Economic Fundamentals,0.45,County EBI / US EBI,0.50,income_ratio,CreditScope|ACS|BEA
+Enterprise Profile,Economic Fundamentals,0.45,County EBI / US EBI,0.50,income_ratio,CreditScope|CensusACS|BEA
 Enterprise Profile,Economic Fundamentals,0.45,County GDP Growth,0.50,gdp_growth,BEA
 Enterprise Profile,Industry Risk,0.20,Industry Risk Assessment,1.00,industry_risk,Manual
-Enterprise Profile,Market Position,0.25,Poverty Rate,0.50,poverty_rate,ACS|CreditScope
-Enterprise Profile,Market Position,0.25,Utility Bill as % Median Household EBI,0.50,utility_bill_affordability,CreditScope|OS
-Enterprise Profile,Operational Management Assessment,0.10,Operational Management Assessment,1.00,operational_management_assessment,OS|RatingReport|Manual
-Financial Profile,All in Coverage,0.40,All-in Coverage Ratio,1.00,coverage_ratio,CreditScope|ACFR|OS
-Financial Profile,Liquidity and Reserves,0.40,Cash / Daily Operating Expense,1.00,cash_days,CreditScope|ACFR
+Enterprise Profile,Market Position,0.25,Poverty Rate,0.50,poverty_rate,CensusACS|CreditScope
+Enterprise Profile,Market Position,0.25,Utility Bill as % of Median Household EBI,0.50,utility_bill_affordability,CensusACS|CreditScope|OS
+Enterprise Profile,Operational Management Assessment,0.10,Operational Management Assessment,1.00,operational_management_assessment,Manual|OS|RatingReport
+Financial Profile,All in Coverage,0.40,All-in Coverage Ratio,1.00,coverage_ratio,ACFR|OS
+Financial Profile,Liquidity and Reserves,0.40,Cash / Daily Operating Expense,1.00,cash_days,ACFR|OS
 Financial Profile,Debt & Liabilities,0.10,Debt / (Debt + Net Assets),1.00,debt_to_capitalization,CreditScope|ACFR
-Financial Profile,Financial Management Assessment,0.10,Financial Management Assessment,1.00,financial_management_assessment,OS|RatingReport|Manual
+Financial Profile,Financial Management Assessment,0.10,Financial Management Assessment,1.00,financial_management_assessment,Manual|OS|RatingReport
