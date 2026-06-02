@@ -1,0 +1,8 @@
+methodology_id,display_name,agency,template,aggregation_style,profile_weights,notes
+moodys_ccd_go,Moody's CCD GO,Moody's,moodys_ccd_go.csv,direct_weighted_average,,Community college district GO scorecard; factors include Economy/Tax Base, Finance, Management, Debt/Pensions.
+moodys_k12,Moody's K-12 Public School Districts,Moody's,moodys_k12.csv,direct_weighted_average,,K-12 public school district scorecard; factors include Economy/Tax Base, Financial Performance, Institutional Framework, Debt/Pensions.
+sp_local_gov_k12,S&P U.S. Government / Local Government / K-12 GO,S&P,sp_local_gov_k12.csv,direct_weighted_average,,U.S. government ICP template with five 20% factors; anchor requires separate IF x ICP lookup.
+sp_local_gov,S&P Local Government GO,S&P,sp_local_gov_k12.csv,direct_weighted_average,,Alias to sp_local_gov_k12 until separate local government template is created.
+sp_us_government_2024,S&P Methodology for Rating U.S. Governments 2024,S&P,sp_local_gov_k12.csv,direct_weighted_average,,Alias to sp_local_gov_k12; based on S&P U.S. Governments methodology.
+sp_water_sewer,S&P Municipal Water/Sewer/Solid Waste Utility,S&P,sp_water_sewer.csv,profile_then_blended_average,"Enterprise Profile=0.50; Financial Profile=0.50",Enterprise and financial profiles calculated separately before anchor lookup.
+sp_community_college_go,S&P Not-For-Profit Education / Community College GO,S&P,sp_community_college_go.csv,profile_then_blended_average,"Enterprise Profile=0.50; Financial Profile=0.50",Education provider template with Enterprise and Financial profiles.
