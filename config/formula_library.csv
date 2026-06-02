@@ -1,81 +1,39 @@
 formula_id,formula_name,expression,required_data,category
-
-gdp_per_capita,GDP Per Capita,county_gdp_per_capita,gdp_per_capita,Economy
-
+income_ratio,County EBI / US EBI,county_ebi / us_ebi,county_ebi;us_ebi,Economy
+gdp_growth,County GDP Growth,(county_gdp_current - county_gdp_prior) / county_gdp_prior,county_gdp_current;county_gdp_prior,Economy
+gdp_per_capita,GDP Per Capita,gdp_per_capita,gdp_per_capita,Economy
+gdp_per_capita_ratio,GDP Per Capita Ratio,county_gdp_per_capita / us_gdp_per_capita,county_gdp_per_capita;us_gdp_per_capita,Economy
 personal_income_per_capita,Personal Income Per Capita,personal_income_per_capita,personal_income_per_capita,Economy
-
-income_ratio,County EBI / US EBI,county_ebi/us_ebi,county_ebi;us_ebi,Economy
-
-resident_income_ratio,MHI Adjusted for RPP / US Median Income,mhi_adjusted_rpp/us_median_income,mhi_adjusted_rpp;us_median_income,Economy
-
-wealth_ratio,Issuer MFI / US MFI,issuer_mfi/us_mfi,issuer_mfi;us_mfi,Economy
-
-population_growth,Population Growth,(population_current-population_prior)/population_prior,population_current;population_prior,Economy
-
-assessed_value_growth,Assessed Value Growth,(av_current-av_prior)/av_prior,av_current;av_prior,Economy
-
-full_value_per_capita,Full Value Per Capita,full_value/population,full_value;population,Economy
-
-tax_base_size,Tax Base Size,full_value,full_value,Economy
-
-service_area_population,Service Area Population,population,population,Economy
-
+personal_income_ratio,Personal Income Ratio,local_personal_income_per_capita / us_personal_income_per_capita,local_personal_income_per_capita;us_personal_income_per_capita,Economy
+resident_income_ratio,Resident Income Ratio,mhi_adjusted_rpp / us_median_income,mhi_adjusted_rpp;us_median_income,Economy
+wealth_ratio,Wealth Ratio,issuer_mfi / us_mfi,issuer_mfi;us_mfi,Economy
+population_growth,Population Growth,(population_current - population_prior) / population_prior,population_current;population_prior,Economy
+assessed_value_growth,Assessed Value Growth,(assessed_value_current - assessed_value_prior) / assessed_value_prior,assessed_value_current;assessed_value_prior,Economy
+service_area_population,Service Area Population,service_area_population,service_area_population,Economy
+poverty_rate,Poverty Rate,poverty_rate,poverty_rate,Economy
+utility_bill_affordability,Utility Bill as % of Median Household EBI,annual_utility_bill / median_household_ebi,annual_utility_bill;median_household_ebi,Economy
+full_value_per_capita,Full Value Per Capita,full_value / population,full_value;population,Tax Base
 fte_enrollment,FTE Enrollment,fte_enrollment,fte_enrollment,Enrollment
-
-enrollment_cagr,3 Year Enrollment CAGR,((enrollment_t/enrollment_t_minus_3)^(1/3))-1,enrollment_t;enrollment_t_minus_3,Enrollment
-
-adjusted_operating_margin,Adjusted Operating Margin,(adjusted_operating_revenue-adjusted_operating_expense)/adjusted_operating_revenue,adjusted_operating_revenue;adjusted_operating_expense,Operations
-
-gov_operating_margin_3yr_avg,3 Year Average Governmental Margin,avg_3yr((governmental_revenue-governmental_expense+transfers)/governmental_revenue),governmental_revenue;governmental_expense;transfers,Operations
-
-operating_history_ratio,Operating History,avg_5yr(operating_revenue/operating_expense),operating_revenue;operating_expense,Operations
-
-coverage_ratio,All In Coverage,(operating_revenue-operating_expense)/mads,operating_revenue;operating_expense;mads,Operations
-
-cash_days,Cash Days,cash/(operating_expense/365),cash;operating_expense,Liquidity
-
-cash_to_opex,Cash to Operating Expense,cash/operating_expense,cash;operating_expense,Liquidity
-
-available_fund_balance_ratio,Available Fund Balance Ratio,available_fund_balance/operating_revenue,available_fund_balance;operating_revenue,Liquidity
-
-available_fund_balance_ratio_3yr_avg,3 Year Average Available Fund Balance Ratio,avg_3yr(available_fund_balance/governmental_revenue),available_fund_balance;governmental_revenue,Liquidity
-
-fund_balance_ratio,Fund Balance Ratio,fund_balance/revenue,fund_balance;revenue,Liquidity
-
-cash_balance_ratio,Cash Balance Ratio,cash/revenue,cash;revenue,Liquidity
-
-fund_balance_trend_5yr,Fund Balance Trend,current_fund_balance_ratio-fund_balance_ratio_5yr_ago,current_fund_balance_ratio;fund_balance_ratio_5yr_ago,Liquidity
-
-cash_balance_trend_5yr,Cash Balance Trend,current_cash_ratio-cash_ratio_5yr_ago,current_cash_ratio;cash_ratio_5yr_ago,Liquidity
-
-debt_to_capitalization,Debt to Capitalization,debt/(debt+net_assets),debt;net_assets,Debt
-
-debt_to_full_value,Debt to Full Value,net_direct_debt/full_value,net_direct_debt;full_value,Debt
-
-debt_to_revenue,Debt to Revenue,net_direct_debt/revenue,net_direct_debt;revenue,Debt
-
-cash_to_ltd,Cash to Long Term Debt,cash/long_term_debt,cash;long_term_debt,Debt
-
-mads_burden,MADS Burden,mads/operating_expense,mads;operating_expense,Debt
-
-net_direct_debt_per_capita,Net Direct Debt Per Capita,net_direct_debt/population,net_direct_debt;population,Debt
-
-npl_per_capita,Net Pension Liability Per Capita,net_pension_liability/population,net_pension_liability;population,Pension
-
-adjusted_npl_to_full_value,Adjusted NPL to Full Value,adjusted_npl/full_value,adjusted_npl;full_value,Pension
-
-adjusted_npl_to_revenue,Adjusted NPL to Revenue,adjusted_npl/revenue,adjusted_npl;revenue,Pension
-
-long_term_liabilities_ratio,Long Term Liabilities Ratio,(debt+adjusted_npl+adjusted_opeb)/operating_revenue,debt;adjusted_npl;adjusted_opeb;operating_revenue,Pension
-
-fixed_cost_ratio,Fixed Cost Ratio,(debt_service+pension_cost+opeb_cost)/operating_revenue,debt_service;pension_cost;opeb_cost;operating_revenue,Pension
-
-financial_management_assessment,Financial Management Assessment,qualitative,manual,Qualitative
-
-management_governance_assessment,Management Governance Assessment,qualitative,manual,Qualitative
-
+enrollment_cagr,Enrollment CAGR 3Y,(enrollment_current / enrollment_3yr_prior)^(1/3) - 1,enrollment_current;enrollment_3yr_prior,Enrollment
+adjusted_operating_margin,Adjusted Operating Margin,(adjusted_operating_revenue - adjusted_operating_expense) / adjusted_operating_revenue,adjusted_operating_revenue;adjusted_operating_expense,Financial Performance
+gov_operating_margin_3yr_avg,Governmental Operating Margin 3Y Average,avg_3yr((governmental_revenue - governmental_expense + transfers) / governmental_revenue),governmental_revenue;governmental_expense;transfers,Financial Performance
+coverage_ratio,All-in Coverage Ratio,(operating_revenue - operating_expense) / mads,operating_revenue;operating_expense;mads,Financial Performance
+available_fund_balance_ratio,Available Fund Balance Ratio,available_fund_balance / operating_revenue,available_fund_balance;operating_revenue,Liquidity
+available_fund_balance_ratio_3yr_avg,Available Fund Balance Ratio 3Y Average,avg_3yr(available_fund_balance / governmental_revenue),available_fund_balance;governmental_revenue,Liquidity
+net_cash_to_operating_revenue,Net Cash to Operating Revenue,net_cash / operating_revenue,net_cash;operating_revenue,Liquidity
+cash_to_opex,Cash and Investments to Operating Expenses,cash_and_investments / operating_expense,cash_and_investments;operating_expense,Liquidity
+cash_days,Cash Days,cash / (operating_expense / 365),cash;operating_expense,Liquidity
+debt_to_capitalization,Debt to Capitalization,debt / (debt + net_assets),debt;net_assets,Debt
+mads_burden,MADS Burden,mads / operating_expense,mads;operating_expense,Debt
+cash_to_ltd,Cash to Long-Term Debt,cash_and_investments / long_term_debt,cash_and_investments;long_term_debt,Debt
+net_direct_debt_per_capita,Net Direct Debt Per Capita,net_direct_debt / population,net_direct_debt;population,Debt
+fixed_cost_burden_ratio,Fixed Cost Burden Ratio,(debt_service + pension_cost + opeb_cost) / governmental_revenue,debt_service;pension_cost;opeb_cost;governmental_revenue,Debt
+npl_per_capita,Net Pension Liability Per Capita,net_pension_liability / population,net_pension_liability;population,Pension
+long_term_liabilities_ratio,Long-Term Liabilities Ratio,(debt + adjusted_npl + adjusted_opeb) / operating_revenue,debt;adjusted_npl;adjusted_opeb;operating_revenue,Pension
+fixed_cost_ratio,Fixed Costs Ratio,(debt_service + pension_cost + opeb_cost) / operating_revenue,debt_service;pension_cost;opeb_cost;operating_revenue,Pension
 institutional_framework_rating,Institutional Framework Rating,qualitative,manual,Qualitative
-
 industry_risk,Industry Risk Assessment,qualitative,manual,Qualitative
-
+management_assessment,Management Assessment,qualitative,manual,Qualitative
+management_governance_assessment,Management & Governance Assessment,qualitative,manual,Qualitative
 operational_management_assessment,Operational Management Assessment,qualitative,manual,Qualitative
+financial_management_assessment,Financial Management Assessment,qualitative,manual,Qualitative
