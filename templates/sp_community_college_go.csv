@@ -3,18 +3,18 @@ section,factor,factor_weight,metric,metric_weight,formula_id,source_priority
 Enterprise Profile,Industry Risk,0.10,Industry Risk Assessment,1.00,industry_risk,Manual
 
 Enterprise Profile,Economy,0.10,GDP Per Capita,0.25,gdp_per_capita,CreditScope|Census|BEA
-Enterprise Profile,Economy,0.10,Personal Income,0.25,personal_income_per_capita,CreditScope|Census|BEA
+Enterprise Profile,Economy,0.10,Personal Income Per Capita,0.25,personal_income_per_capita,CreditScope|Census|BEA
 Enterprise Profile,Economy,0.10,Population Growth,0.25,population_growth,CreditScope|Census
 Enterprise Profile,Economy,0.10,Assessed Value Growth,0.25,assessed_value_growth,CreditScope|CountyAssessor
 
 Enterprise Profile,Market Position,0.60,Service Area Population,0.50,service_area_population,CreditScope|Census
-Enterprise Profile,Market Position,0.60,FTE Enrollment,0.50,fte_enrollment,IPEDS|CreditScope|AnnualReport
+Enterprise Profile,Market Position,0.60,FTE Enrollment,0.50,fte_enrollment,IPEDS|AnnualReport|CreditScope
 
 Enterprise Profile,Management & Governance,0.20,Management & Governance Assessment,1.00,management_governance_assessment,BudgetDocuments|StrategicPlans|BoardReports|RatingReports|Manual
 
 Financial Profile,Financial Performance,0.30,Adjusted Operating Margin,1.00,adjusted_operating_margin,CreditScope|ACFR
 
-Financial Profile,Financial Resources,0.35,Cash and Investments to Operating Expenses,1.00,cash_to_opex,CreditScope|ACFR
+Financial Profile,Financial Resources,0.35,Cash & Investments / Operating Expenses,1.00,cash_to_opex,CreditScope|ACFR
 
 Financial Profile,Debt & Contingent Liabilities,0.35,MADS Burden,0.50,mads_burden,OS|ACFR
 Financial Profile,Debt & Contingent Liabilities,0.35,Cash to Long-Term Debt,0.50,cash_to_ltd,CreditScope|ACFR
