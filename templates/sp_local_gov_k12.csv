@@ -1,11 +1,17 @@
 section,factor,factor_weight,metric,metric_weight,formula_id,source_priority
+
 Individual Credit Profile Assessment,Economy,0.20,Real Gross County Product per Capita as % of U.S. GDP per Capita,0.50,gdp_per_capita_ratio,BEA
+
 Individual Credit Profile Assessment,Economy,0.20,Real Per Capita Personal Income as % of U.S. Personal Income,0.50,personal_income_ratio,BEA
+
 Individual Credit Profile Assessment,Financial Performance,0.20,Three-Year Average Operating Result,1.00,gov_operating_margin_3yr_avg,CreditScope|ACFR
+
 Individual Credit Profile Assessment,Reserves and Liquidity,0.20,Three-Year Average Available Fund Balance Ratio,1.00,available_fund_balance_ratio_3yr_avg,ACFR|CreditScope
-Individual Credit Profile Assessment,Management,0.20,Budget Practice,0.33,budget_practice_assessment,Manual
-Individual Credit Profile Assessment,Management,0.20,Long-Term Planning,0.33,long_term_planning_assessment,Manual
-Individual Credit Profile Assessment,Management,0.20,Policies,0.34,policy_assessment,Manual
+
+Individual Credit Profile Assessment,Management,0.20,Management Assessment,1.00,management_assessment,Manual
+
 Individual Credit Profile Assessment,Debt & Liabilities,0.20,Current Cost for Debt Service and Liabilities,0.50,fixed_cost_burden_ratio,CreditScope|ACFR
+
 Individual Credit Profile Assessment,Debt & Liabilities,0.20,Net Direct Debt per Capita,0.25,net_direct_debt_per_capita,CreditScope
+
 Individual Credit Profile Assessment,Debt & Liabilities,0.20,Net Pension Liability per Capita,0.25,npl_per_capita,CreditScope|ACFR
