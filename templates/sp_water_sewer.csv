@@ -4,14 +4,8 @@ Enterprise Profile,Economic Fundamentals,0.45,County GDP Growth,0.50,gdp_growth,
 Enterprise Profile,Industry Risk,0.20,Industry Risk Assessment,1.00,industry_risk,Manual
 Enterprise Profile,Market Position,0.25,Poverty Rate,0.50,poverty_rate,ACS|CreditScope
 Enterprise Profile,Market Position,0.25,Utility Bill as % Median Household EBI,0.50,utility_bill_affordability,CreditScope|OS
-Enterprise Profile,Operational Management Assessment,0.10,Long-Term Planning,0.25,management_long_term_planning,OS|RatingReport|Manual
-Enterprise Profile,Operational Management Assessment,0.10,Capital Planning,0.25,management_capital_planning,OS|RatingReport|Manual
-Enterprise Profile,Operational Management Assessment,0.10,Rate Setting,0.25,management_rate_setting,OS|RatingReport|Manual
-Enterprise Profile,Operational Management Assessment,0.10,Reserve Policy,0.25,management_reserve_policy,OS|RatingReport|Manual
+Enterprise Profile,Operational Management Assessment,0.10,Operational Management Assessment,1.00,operational_management_assessment,OS|RatingReport|Manual
 Financial Profile,All in Coverage,0.40,All-in Coverage Ratio,1.00,coverage_ratio,CreditScope|ACFR|OS
 Financial Profile,Liquidity and Reserves,0.40,Cash / Daily Operating Expense,1.00,cash_days,CreditScope|ACFR
 Financial Profile,Debt & Liabilities,0.10,Debt / (Debt + Net Assets),1.00,debt_to_capitalization,CreditScope|ACFR
-Financial Profile,Financial Management Assessment,0.10,Budgeting,0.25,financial_management_budgeting,OS|RatingReport|Manual
-Financial Profile,Financial Management Assessment,0.10,Rate Setting,0.25,financial_management_rate_setting,OS|RatingReport|Manual
-Financial Profile,Financial Management Assessment,0.10,Forecasting,0.25,financial_management_forecasting,OS|RatingReport|Manual
-Financial Profile,Financial Management Assessment,0.10,Reserve Policy,0.25,financial_management_reserve_policy,OS|RatingReport|Manual
+Financial Profile,Financial Management Assessment,0.10,Financial Management Assessment,1.00,financial_management_assessment,OS|RatingReport|Manual
