@@ -1,0 +1,13 @@
+source_name,source_type,access_method,structured,requires_upload,requires_api_key,preferred_for,notes
+BEA,API,bea_connector,true,false,true,"GDP;personal_income;regional_income","Use for raw economic data only. Do not import calculated ratios."
+CensusACS,API,census_connector,true,false,true,"population;poverty_rate;median_income;median_family_income","Use ACS raw fields for demographics and income."
+CreditScope,Upload,creditscope_loader,true,true,false,"full_value;assessed_value;debt;cash;revenue;expense;pension","Use uploaded raw numeric fields only. Do not use CreditScope ratios or derived metrics."
+IPEDS_Excel,Upload,ipeds_excel_loader,true,true,false,"fte_enrollment;enrollment_current;enrollment_3yr_prior","IPEDS is treated as structured Excel upload, not API."
+OS,Document,document_extractor,false,true,false,"mads;annual_utility_bill;debt_schedule","Use only when structured source is unavailable or for OS-specific bond fields."
+ACFR,Document,document_extractor,false,true,false,"fund_balance_breakdown;transfers;net_assets;debt_service","Fallback for raw audited financial statement fields."
+CountyAssessor,Document,document_extractor,false,true,false,"full_value;assessed_value","Fallback for tax base data when CreditScope is missing."
+RateStudy,Document,document_extractor,false,true,false,"annual_utility_bill;rate_schedule","Fallback for utility affordability inputs."
+MoodysWorkbook,Document,manual_or_document_extractor,false,true,false,"adjusted_npl;adjusted_opeb","Use for Moody's adjusted pension/OPEB inputs."
+RatingReport,Document,manual_or_document_extractor,false,true,false,"qualitative_context;management_assessment","Use for analyst context, not automatic quantitative formulas."
+AnnualReport,Document,document_extractor,false,true,false,"enrollment;fte_enrollment","Fallback for enrollment if IPEDS Excel is missing."
+Manual,Manual,user_input,false,false,false,"manual_score;qualitative_assessment;missing_fields","Use only for qualitative scores, overrides, or unavailable raw data."
