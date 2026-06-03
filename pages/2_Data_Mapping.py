@@ -15,7 +15,12 @@ if str(PROJECT_ROOT) not in sys.path:
 try:
     from engine.calculator_engine import load_formula_library, parse_required_fields
     from engine.factor_engine import load_factor_template
-    from engine.mapping_engine import map_creditscope_workbook, map_uploaded_file, merge_issuer_data
+    from engine.mapping_engine import map_creditscope_workbook, map_uploaded_file
+    from engine.data_sourcing_engine import (
+        mapping_report_to_source_candidates,
+        manual_data_to_source_candidates,
+        run_data_sourcing_pipeline,
+    )
 except Exception as exc:  # pragma: no cover - Streamlit display path
     st.set_page_config(page_title="Data Mapping", page_icon="②", layout="wide")
     st.error("Could not import mapping/calculator engines.")
@@ -136,7 +141,7 @@ source_options = {
     "acfr": ("ACFR", "ACFR / Audit table extract"),
 }
 
-mapped_outputs: List[Dict[str, Any]] = []
+mapped_candidate_frames: List[pd.DataFrame] = []
 match_reports: List[pd.DataFrame] = []
 cols = st.columns(4)
 for i, (key, (source_name, label)) in enumerate(source_options.items()):
@@ -166,10 +171,12 @@ for i, (key, (source_name, label)) in enumerate(source_options.items()):
                 )
             st.session_state["uploaded_sources"][key] = uploaded.name
             st.success(f"{len(source_data)} fields mapped")
-            mapped_outputs.append(source_data)
             if not report.empty:
                 report.insert(0, "uploaded_file", uploaded.name)
                 match_reports.append(report)
+                mapped_candidate_frames.append(
+                    mapping_report_to_source_candidates(report, uploaded_file=uploaded.name)
+                )
         except Exception as exc:
             st.error(f"Could not map {uploaded.name}.")
             st.exception(exc)
@@ -195,7 +202,7 @@ for _, row in required_fields.iterrows():
     rows.append(
         {
             "field_name": field_name,
-            "value": existing.get(field_name, _default_value_for_field(field_name)),
+            "value": existing.get(field_name, ""),
             "used_by": row.get("used_by", ""),
             "category": row.get("category", ""),
         }
@@ -222,10 +229,30 @@ else:
 
 if st.button("Save issuer_data", type="primary"):
     manual_data = _clean_edited_values(edited)
-    issuer_data = merge_issuer_data(*mapped_outputs, manual_data, overwrite=True)
-    st.session_state["issuer_data"] = issuer_data
+    manual_candidates = manual_data_to_source_candidates(manual_data)
+    required_field_names = required_fields["field_name"].dropna().astype(str).str.strip().tolist()
+    sourcing_output = run_data_sourcing_pipeline(
+        [*mapped_candidate_frames, manual_candidates],
+        methodology_id=methodology_id,
+        required_fields=required_field_names,
+        source_priority_path="config/source_priority.csv",
+    )
+    st.session_state["issuer_data"] = sourcing_output["issuer_data"]
+    st.session_state["source_report"] = sourcing_output["source_report"]
+    st.session_state["source_candidates"] = sourcing_output["source_candidates"]
+    st.session_state["source_readiness_summary"] = sourcing_output["source_readiness_summary"]
     st.session_state["source_match_reports"] = pd.concat(match_reports, ignore_index=True) if match_reports else pd.DataFrame()
-    st.success(f"Saved {len(issuer_data)} canonical fields. Go to Calculators next.")
+    st.success(f"Saved {len(sourcing_output['issuer_data'])} canonical fields. Go to Calculators next.")
+
+with st.expander("Source readiness summary", expanded=True):
+    readiness = st.session_state.get("source_readiness_summary", pd.DataFrame())
+    source_report = st.session_state.get("source_report", pd.DataFrame())
+    if isinstance(readiness, pd.DataFrame) and not readiness.empty:
+        st.dataframe(readiness, use_container_width=True, hide_index=True)
+    else:
+        st.info("No source selection has been saved yet.")
+    if isinstance(source_report, pd.DataFrame) and not source_report.empty:
+        st.dataframe(source_report, use_container_width=True, hide_index=True)
 
 with st.expander("Current issuer_data", expanded=False):
     data = st.session_state.get("issuer_data", {}) or {}

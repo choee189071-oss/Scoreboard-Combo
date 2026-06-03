@@ -1,1 +1,64 @@
-
+field_name,methodology_id,priority_sources,min_confidence,manual_allowed,notes
+adjusted_npl,default,MoodysWorkbook|CreditScope|ACFR|Manual,0.70,true,Moody's adjusted pension liability is source-specific; prefer official Moody's workbook/raw support before generic ACFR.
+adjusted_opeb,default,MoodysWorkbook|CreditScope|ACFR|Manual,0.70,true,Moody's adjusted OPEB liability is source-specific; prefer official Moody's workbook/raw support before generic ACFR.
+adjusted_operating_revenue,default,CreditScope|ACFR|Manual,0.80,true,Raw adjusted revenue denominator for Moody's debt-to-revenue calculations.
+annual_utility_bill,default,OS|RateStudy|Manual,0.75,true,Use raw residential bill or rate-study amount; do not import calculated affordability ratios.
+assessed_value_current,default,CreditScope|CountyAssessor|OS|Manual,0.80,true,Current assessed value for growth formulas.
+assessed_value_prior,default,CreditScope|CountyAssessor|OS|Manual,0.80,true,Prior assessed value for growth formulas.
+assigned_fund_balance,default,CreditScope|ACFR|Manual,0.80,true,Assigned fund balance raw component.
+cash,default,CreditScope|ACFR|Manual,0.80,true,Raw cash amount only; do not import cash ratios.
+cash_and_investments,default,CreditScope|ACFR|Manual,0.80,true,Raw cash and investments.
+cash_ratio_5yr_prior,default,MoodysWorkbook|CreditScope|ACFR|Manual,0.70,true,Trend input retained as source-specific until multi-year raw cash/revenue history is normalized.
+cash_ratio_current,default,MoodysWorkbook|CreditScope|ACFR|Manual,0.70,true,Trend input retained as source-specific until multi-year raw cash/revenue history is normalized.
+committed_fund_balance,default,CreditScope|ACFR|Manual,0.80,true,Committed fund balance raw component.
+county_ebi,default,CensusACS|BEA|Manual,0.80,true,Raw local income/effective buying income input.
+county_gdp,default,BEA|CreditScope|Manual,0.85,true,Raw county GDP or gross county product.
+county_gdp_current,default,BEA|CreditScope|Manual,0.85,true,Current-period raw county GDP.
+county_gdp_prior,default,BEA|CreditScope|Manual,0.85,true,Prior-period raw county GDP.
+debt,default,CreditScope|OS|ACFR|Manual,0.80,true,Raw total debt.
+debt_service,default,CreditScope|OS|ACFR|Manual,0.80,true,Raw annual debt service.
+enrollment_3yr_prior,default,IPEDS_Excel|CreditScope|AnnualReport|Manual,0.80,true,Enrollment three years prior.
+enrollment_current,default,IPEDS_Excel|CreditScope|AnnualReport|Manual,0.80,true,Current enrollment.
+fte_enrollment,default,IPEDS_Excel|CreditScope|AnnualReport|Manual,0.80,true,Full-time equivalent enrollment.
+full_value,default,CreditScope|CountyAssessor|OS|Manual,0.80,true,Raw full value/full valuation.
+fund_balance,default,CreditScope|ACFR|Manual,0.80,true,Raw fund balance amount only.
+fund_balance_ratio_5yr_prior,default,MoodysWorkbook|CreditScope|ACFR|Manual,0.70,true,Trend input retained as source-specific until multi-year raw fund balance/revenue history is normalized.
+fund_balance_ratio_current,default,MoodysWorkbook|CreditScope|ACFR|Manual,0.70,true,Trend input retained as source-specific until multi-year raw fund balance/revenue history is normalized.
+governmental_expense,default,CreditScope|ACFR|Manual,0.80,true,Raw governmental expense.
+governmental_revenue,default,CreditScope|ACFR|Manual,0.80,true,Raw governmental revenue.
+issuer_mfi,default,CensusACS|CreditScope|Manual,0.80,true,Issuer-area median family income.
+long_term_debt,default,CreditScope|OS|ACFR|Manual,0.80,true,Raw long-term debt.
+mads,default,OS|CreditScope|ACFR|Manual,0.75,true,Maximum annual debt service usually comes from OS/debt schedule.
+median_household_ebi,default,CensusACS|BEA|OS|Manual,0.80,true,Raw median household income/EBI denominator for utility affordability.
+mhi_adjusted_rpp,default,CensusACS|BEA|Manual,0.80,true,Median household income adjusted by regional price parity.
+net_assets,default,CreditScope|ACFR|Manual,0.80,true,Raw net assets/net position.
+net_direct_debt,default,CreditScope|OS|ACFR|Manual,0.80,true,Raw net direct debt.
+net_pension_liability,default,CreditScope|ACFR|Manual,0.80,true,Raw net pension liability.
+opeb_cost,default,CreditScope|ACFR|Manual,0.80,true,Raw OPEB cost.
+operating_expense,default,CreditScope|ACFR|Manual,0.80,true,Raw operating expense.
+operating_revenue,default,CreditScope|ACFR|Manual,0.80,true,Raw operating revenue.
+pension_cost,default,CreditScope|ACFR|Manual,0.80,true,Raw pension cost.
+personal_income,default,BEA|CensusACS|CreditScope|Manual,0.85,true,Raw local personal income.
+population,default,CensusACS|CreditScope|Manual,0.85,true,Raw population. Keep geography explicit in source notes.
+population_current,default,CensusACS|CreditScope|Manual,0.85,true,Current-period population.
+population_prior,default,CensusACS|CreditScope|Manual,0.85,true,Prior-period population.
+population_us,default,CensusACS|BEA|Manual,0.85,true,Raw U.S. population denominator.
+poverty_rate,default,CensusACS|CreditScope|OS|Manual,0.80,true,Raw poverty rate.
+revenue,default,CreditScope|ACFR|Manual,0.80,true,Raw total revenue denominator.
+service_area_population,default,CensusACS|CreditScope|OS|Manual,0.80,true,Raw service-area population; confirm geography.
+tax_base_population,default,CensusACS|CreditScope|CountyAssessor|Manual,0.85,true,Raw population denominator for tax-base per-capita formulas; do not mix with generic population if geography differs.
+transfers,default,CreditScope|ACFR|Manual,0.80,true,Raw transfers/other financing sources and uses.
+unassigned_fund_balance,default,CreditScope|ACFR|Manual,0.80,true,Unassigned fund balance raw component.
+us_ebi,default,BEA|CensusACS|Manual,0.85,true,Raw U.S. EBI benchmark.
+us_gdp,default,BEA|CreditScope|Manual,0.85,true,Raw U.S. GDP.
+us_gdp_current,default,BEA|CreditScope|Manual,0.85,true,Current-period raw U.S. GDP.
+us_gdp_prior,default,BEA|CreditScope|Manual,0.85,true,Prior-period raw U.S. GDP.
+us_median_income,default,CensusACS|Manual,0.85,true,U.S. median income denominator.
+us_mfi,default,CensusACS|Manual,0.85,true,U.S. median family income.
+us_personal_income,default,BEA|CensusACS|Manual,0.85,true,Raw U.S. personal income.
+institutional_framework_rating,default,Manual|RatingReport,0.50,true,Qualitative/manual score only.
+industry_risk,default,Manual|RatingReport,0.50,true,Qualitative/manual score only.
+management_assessment,default,Manual|RatingReport,0.50,true,Qualitative/manual score only.
+management_governance_assessment,default,Manual|RatingReport,0.50,true,Qualitative/manual score only.
+operational_management_assessment,default,Manual|RatingReport|OS,0.50,true,Qualitative/manual score only.
+financial_management_assessment,default,Manual|RatingReport|OS,0.50,true,Qualitative/manual score only.
