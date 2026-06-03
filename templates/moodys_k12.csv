@@ -5,5 +5,5 @@ Economy / Tax Base,Economy / Tax Base,0.30,Enrollment Trend,0.333333333334,enrol
 Financial Performance,Financial Performance,0.30,Available Fund Balance Ratio,0.666666666667,available_fund_balance_ratio,ACFR|CreditScope
 Financial Performance,Financial Performance,0.30,Net Cash / Operating Revenue,0.333333333333,net_cash_to_operating_revenue,ACFR|CreditScope
 Institutional Framework,Institutional Framework,0.10,Institutional Framework Rating,1.00,institutional_framework_rating,Manual
-Debt / Pensions,Debt / Pensions,0.20,Long-Term Liabilities Ratio,0.666666666667,long_term_liabilities_ratio,CreditScope|ACFR|MoodysPensionWorkbook
-Debt / Pensions,Debt / Pensions,0.20,Fixed Costs Ratio,0.333333333333,fixed_cost_ratio,ACFR|CreditScope
+Debt / Pensions,Debt / Pensions,0.30,Long-Term Liabilities Ratio,0.666666666667,long_term_liabilities_ratio,CreditScope|ACFR|MoodysPensionWorkbook
+Debt / Pensions,Debt / Pensions,0.30,Fixed Costs Ratio,0.333333333333,fixed_cost_ratio,ACFR|CreditScope

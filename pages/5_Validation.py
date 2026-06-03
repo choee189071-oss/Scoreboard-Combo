@@ -52,6 +52,13 @@ try:
         run_rating_engine,
         summarize_rating_output,
     )
+    from engine.official_fixture_engine import (
+        compare_metric_scores_to_fixture,
+        list_official_fixture_files,
+        load_fixture_catalog,
+        load_official_fixture,
+        official_fixture_report,
+    )
 except Exception as exc:  # pragma: no cover - Streamlit display path
     st.set_page_config(page_title="Validation", page_icon="🧪", layout="wide")
     st.error("Could not import engine modules. Please confirm engine/factor_engine.py and engine/rating_engine.py exist.")
@@ -97,89 +104,6 @@ def _clean_optional_float(value: Any) -> Optional[float]:
         return float(text)
     except Exception:
         return None
-
-
-def _fixture_files() -> Dict[str, Path]:
-    fixture_dir = PROJECT_ROOT / "config" / "validation_fixtures"
-    if not fixture_dir.exists():
-        return {}
-    return {path.stem: path for path in sorted(fixture_dir.glob("*.csv"))}
-
-
-def _load_fixture(path: Path) -> pd.DataFrame:
-    df = pd.read_csv(path)
-    required = {
-        "test_case",
-        "methodology_id",
-        "issuer_name",
-        "official_rating",
-        "official_weighted_score",
-        "formula_id",
-        "official_weight",
-        "official_value",
-        "official_score",
-        "official_score_label",
-    }
-    missing = required - set(df.columns)
-    if missing:
-        raise ValueError(f"Fixture {path.name} is missing columns: {sorted(missing)}")
-    df = df.copy()
-    df["official_score"] = pd.to_numeric(df["official_score"], errors="coerce")
-    df["official_weight"] = pd.to_numeric(df["official_weight"], errors="coerce")
-    df["official_weighted_score_contribution"] = df["official_weight"] * df["official_score"]
-    return df
-
-
-def _fixture_formula_records(fixture: pd.DataFrame) -> pd.DataFrame:
-    return pd.DataFrame(
-        {
-            "formula_id": fixture["formula_id"].astype(str),
-            "formula_name": fixture.get("metric", fixture["formula_id"]).astype(str),
-            "status": "ready",
-            "value": fixture["official_value"],
-            "numeric_score": fixture["official_score"],
-            "score_label": fixture["official_score_label"],
-        }
-    )
-
-
-def _fixture_metric_scores(fixture: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
-    out: Dict[str, Dict[str, Any]] = {}
-    for _, row in fixture.iterrows():
-        score = _clean_optional_float(row.get("official_score"))
-        if score is None:
-            continue
-        out[str(row["formula_id"])] = {
-            "numeric_score": score,
-            "score_label": str(row.get("official_score_label", "") or ""),
-        }
-    return out
-
-
-def _compare_metric_scores_to_fixture(output: Dict[str, Any], fixture: pd.DataFrame) -> pd.DataFrame:
-    factor_output = output.get("factor_engine_output", {}) or {}
-    metric_df = factor_output.get("metric_scores", pd.DataFrame())
-    if not isinstance(metric_df, pd.DataFrame) or metric_df.empty:
-        return pd.DataFrame()
-    compare = fixture[
-        [
-            "section",
-            "factor",
-            "metric",
-            "formula_id",
-            "official_value",
-            "official_score",
-            "official_score_label",
-            "official_weight",
-        ]
-    ].merge(
-        metric_df[["formula_id", "raw_value", "numeric_score", "score_label", "status", "missing_reason"]],
-        on="formula_id",
-        how="left",
-    )
-    compare["score_delta"] = pd.to_numeric(compare["numeric_score"], errors="coerce") - pd.to_numeric(compare["official_score"], errors="coerce")
-    compare["score_match"] = compare["score_delta"].abs() <= 0.0001
-    return compare
 
 
 def _show_rating_result(output: Dict[str, Any], benchmark_rating: str = "", benchmark_score: Optional[float] = None) -> None:
@@ -352,41 +276,57 @@ st.divider()
 
 if mode == "Official fixture comparison":
     st.subheader("Official fixture comparison")
-    st.write("Load a reference scorecard fixture and compare model aggregation against official subfactor values, scores, weights, and rating.")
+    st.write("Load a reference scorecard fixture and compare model aggregation against official subfactor values, scores, weights, profiles, and rating.")
 
-    fixtures = _fixture_files()
+    fixture_dir = PROJECT_ROOT / "config" / "validation_fixtures"
+    fixtures = list_official_fixture_files(fixture_dir)
     if not fixtures:
         st.info("No validation fixtures found under config/validation_fixtures.")
     else:
-        selected_fixture = st.selectbox("Fixture", options=list(fixtures.keys()))
+        catalog = load_fixture_catalog(fixture_dir)
+        if not catalog.empty:
+            with st.expander("Fixture catalog", expanded=True):
+                st.dataframe(catalog, use_container_width=True, hide_index=True)
+
+        def _fixture_label(key: str) -> str:
+            if catalog.empty or "fixture_key" not in catalog.columns:
+                return key
+            row = catalog[catalog["fixture_key"] == key]
+            if row.empty:
+                return key
+            rec = row.iloc[0]
+            issuer = rec.get("issuer_name", "")
+            methodology = rec.get("methodology_id", "")
+            rating = rec.get("official_rating", "")
+            return f"{issuer} | {methodology} | {rating}".strip(" |")
+
+        selected_fixture = st.selectbox("Fixture", options=list(fixtures.keys()), format_func=_fixture_label)
         try:
-            fixture = _load_fixture(fixtures[selected_fixture])
+            fixture = load_official_fixture(fixtures[selected_fixture])
             fixture_methodology = str(fixture["methodology_id"].iloc[0])
             fixture_rating = str(fixture["official_rating"].iloc[0])
             fixture_score = float(fixture["official_weighted_score"].iloc[0])
-            st.dataframe(fixture, use_container_width=True, hide_index=True)
 
-            formula_df = _fixture_formula_records(fixture)
-            metric_scores = _fixture_metric_scores(fixture)
-            output = run_rating_engine(
-                methodology_id=fixture_methodology,
-                formula_results=formula_df,
-                metric_scores=metric_scores,
-                manual_scores=metric_scores,
+            report = official_fixture_report(
+                fixture,
                 thresholds_path=threshold_path,
                 templates_dir="templates",
             )
+            output = report["output"]
 
             st.session_state["validation_output"] = output
+            with st.expander("Official fixture rows", expanded=False):
+                st.dataframe(fixture, use_container_width=True, hide_index=True)
+
             _show_rating_result(output, benchmark_rating=fixture_rating, benchmark_score=fixture_score)
 
-            official_sum = fixture["official_weighted_score_contribution"].sum()
-            c1, c2 = st.columns(2)
-            c1.metric("Official fixture weighted sum", f"{official_sum:.5f}")
-            c2.metric("Official workbook weighted score", f"{fixture_score:.5f}")
+            with st.expander("Official summary and model comparison", expanded=True):
+                c1, c2 = st.columns(2)
+                c1.dataframe(report["fixture_summary"], use_container_width=True, hide_index=True)
+                c2.dataframe(report["rating_comparison"], use_container_width=True, hide_index=True)
 
             with st.expander("Official vs model metric comparison", expanded=True):
-                comparison = _compare_metric_scores_to_fixture(output, fixture)
+                comparison = report["metric_comparison"]
                 if comparison.empty:
                     st.info("No metric-level model output available for comparison.")
                 else:
@@ -395,7 +335,7 @@ if mode == "Official fixture comparison":
             current_output = st.session_state.get("rating_output")
             if isinstance(current_output, dict):
                 with st.expander("Current Scoreboard output vs official fixture", expanded=False):
-                    current_comparison = _compare_metric_scores_to_fixture(current_output, fixture)
+                    current_comparison = compare_metric_scores_to_fixture(current_output, fixture)
                     if current_comparison.empty:
                         st.info("No current Scoreboard metric output available.")
                     else:

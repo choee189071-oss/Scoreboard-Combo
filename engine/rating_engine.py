@@ -33,8 +33,12 @@ Supported schemes in this MVP
 
 3. S&P Enterprise + Financial profile style
    - sp_water_sewer
-   - sp_community_college_go
    Uses Enterprise Risk/Profile x Financial Risk/Profile anchor matrix.
+
+4. S&P education/community college weighted-score style
+   - sp_community_college_go
+   Uses the weighted-average score bucket observed in the community college
+   scorecard.
 
 This engine can run either from:
 - an existing factor_engine output, or
@@ -141,6 +145,23 @@ SP_PROFILE_ANCHOR_MATRIX: Dict[int, Dict[int, str]] = {
     6: {1: "bbb-", 2: "bb", 3: "bb-", 4: "b+", 5: "b", 6: "b-"},
 }
 
+# S&P education provider / community college weighted score buckets observed in
+# the uploaded Contra Costa CCD S&P scorecard.
+SP_COMMUNITY_COLLEGE_BUCKETS: List[Tuple[Optional[float], Optional[float], str, bool, bool]] = [
+    (1.00, 1.64, "AAA", True, True),
+    (1.65, 1.94, "AA+", True, True),
+    (1.95, 2.34, "AA", True, True),
+    (2.35, 2.84, "AA-", True, True),
+    (2.85, 3.24, "A+", True, True),
+    (3.25, 3.64, "A", True, True),
+    (3.65, 3.94, "A-", True, True),
+    (3.95, 4.24, "BBB+", True, True),
+    (4.25, 4.54, "BBB", True, True),
+    (4.55, 4.74, "BBB-", True, True),
+    (4.75, 4.94, "BB", True, True),
+    (4.95, 5.00, "B", True, True),
+]
+
 
 # -----------------------------------------------------------------------------
 # Data model
@@ -225,6 +246,13 @@ def _normalize_rating(rating: str) -> str:
     return str(rating).strip().lower().replace(" ", "")
 
 
+def _format_sp_rating(rating: str) -> str:
+    text = str(rating or "").strip()
+    if not text:
+        return ""
+    return "/".join(part.strip().upper() for part in text.split("/"))
+
+
 def _rating_index(rating: str) -> Optional[int]:
     rating = _normalize_rating(rating)
     if "/" in rating:
@@ -279,6 +307,53 @@ def _lookup_profile_anchor(enterprise_score: float, financial_score: float) -> s
     erp = _round_to_profile_assessment(enterprise_score)
     frp = _round_to_profile_assessment(financial_score)
     return SP_PROFILE_ANCHOR_MATRIX[erp][frp]
+
+
+def _profile_assessment_candidates(value: float) -> List[int]:
+    value = min(max(float(value), 1.0), 6.0)
+    if abs(value - round(value)) < 1e-9:
+        return [int(round(value))]
+    lo = int(math.floor(value))
+    hi = int(math.ceil(value))
+    return sorted({min(max(lo, 1), 6), min(max(hi, 1), 6)})
+
+
+def _rating_range_strong_side_index(rating: str) -> Optional[int]:
+    rating = str(rating or "").strip().lower()
+    if not rating:
+        return None
+    first = rating.split("/")[0]
+    return _rating_index(first)
+
+
+def _rating_from_scale_index(idx: int) -> str:
+    return RATING_SCALE[min(max(int(idx), 0), len(RATING_SCALE) - 1)]
+
+
+def _lookup_profile_anchor_range(enterprise_score: float, financial_score: float) -> str:
+    """
+    Interpolate the S&P profile matrix for fractional profile scores.
+
+    The official Water/Sewer workbook can show a range such as AA+/AA when a
+    profile score falls between two whole-number profile assessments. Exact
+    whole-number coordinates still return the matrix cell verbatim.
+    """
+    erp_candidates = _profile_assessment_candidates(enterprise_score)
+    frp_candidates = _profile_assessment_candidates(financial_score)
+    cells = [SP_PROFILE_ANCHOR_MATRIX[erp][frp] for erp in erp_candidates for frp in frp_candidates]
+    unique_cells = list(dict.fromkeys(cells))
+    if len(unique_cells) == 1:
+        return unique_cells[0]
+
+    indices = [_rating_range_strong_side_index(cell) for cell in unique_cells]
+    indices = [idx for idx in indices if idx is not None]
+    if not indices:
+        return unique_cells[0]
+    strong = min(indices)
+    weak = max(indices)
+    if strong == weak:
+        return _rating_from_scale_index(strong)
+    return f"{_rating_from_scale_index(strong)}/{_rating_from_scale_index(weak)}"
 
 
 def _first_nonempty(*values: Any) -> Any:
@@ -561,6 +636,15 @@ def map_weighted_score_to_rating(
     return ""
 
 
+def map_sp_community_college_score_to_rating(weighted_score: Optional[float]) -> str:
+    if weighted_score is None:
+        return ""
+    for lo, hi, label, lo_inc, hi_inc in SP_COMMUNITY_COLLEGE_BUCKETS:
+        if _in_range(float(weighted_score), lo, hi, lo_inc, hi_inc):
+            return label
+    return ""
+
+
 def _get_section_score(section_scores: pd.DataFrame, names: Sequence[str]) -> Optional[float]:
     if section_scores is None or section_scores.empty:
         return None
@@ -758,8 +842,20 @@ def run_rating_engine(
             icr = sacp
             rating = icr
 
-    # S&P Water/Sewer and Education: Enterprise x Financial anchor.
-    elif methodology_id in {"sp_water_sewer", "sp_community_college_go"}:
+    # S&P Community College / Education: direct weighted-score bucket.
+    elif methodology_id == "sp_community_college_go":
+        rating_style = "sp_education_weighted_score_bucket"
+        enterprise_score = _get_section_score(section_df, ["Enterprise Profile", "Enterprise Risk Profile"])
+        financial_score = _get_section_score(section_df, ["Financial Profile", "Financial Risk Profile"])
+        rating = map_sp_community_college_score_to_rating(overall_score)
+        if not rating:
+            warnings.append("No S&P community college rating bucket matched the weighted score.")
+        anchor = rating
+        sacp = rating
+        icr = rating
+
+    # S&P Water/Sewer: Enterprise x Financial anchor.
+    elif methodology_id == "sp_water_sewer":
         rating_style = "sp_enterprise_x_financial_anchor_matrix"
         enterprise_score = _get_section_score(section_df, ["Enterprise Profile", "Enterprise Risk Profile"])
         financial_score = _get_section_score(section_df, ["Financial Profile", "Financial Risk Profile"])
@@ -768,7 +864,7 @@ def run_rating_engine(
         if financial_score is None:
             warnings.append("Missing Financial Profile score.")
         if enterprise_score is not None and financial_score is not None:
-            anchor = _lookup_profile_anchor(enterprise_score, financial_score)
+            anchor = _lookup_profile_anchor_range(enterprise_score, financial_score)
             sacp, applied = apply_rating_adjustments(anchor, modifiers=modifiers, caps=caps)
             icr = sacp
             rating = icr
@@ -791,6 +887,12 @@ def run_rating_engine(
 
     if not rating:
         warnings.append("Indicative rating could not be produced because required scores are missing.")
+
+    if agency == "S&P":
+        anchor = _format_sp_rating(anchor)
+        sacp = _format_sp_rating(sacp)
+        icr = _format_sp_rating(icr)
+        rating = _format_sp_rating(rating)
 
     result = RatingResult(
         methodology_id=methodology_id,
