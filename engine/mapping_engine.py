@@ -200,10 +200,53 @@ def _open_workbook(uploaded_file: Any, data_only: bool = True):
     return load_workbook(uploaded_file, read_only=True, data_only=data_only)
 
 
+def _sheet_raw_label_score(ws: Any, max_rows: int = 1200) -> int:
+    raw_terms = {
+        "full value",
+        "total assessed value",
+        "population",
+        "operating revenue",
+        "operating expenses",
+        "revenue",
+        "total debt",
+        "cash and short term investments",
+        "net assets",
+        "net position",
+        "fund balance",
+    }
+    score = 0
+    for row_idx in range(1, min(ws.max_row, max_rows) + 1):
+        label = normalize_label(ws.cell(row_idx, 1).value)
+        if not label or is_likely_derived_creditscope_label(label):
+            continue
+        if label in raw_terms:
+            score += 3
+        elif any(term in label for term in raw_terms):
+            score += 1
+    return score
+
+
 def _pick_creditscope_sheet(workbook: Any, sheet_name: Optional[str] = None):
     if sheet_name and sheet_name in workbook.sheetnames:
         return workbook[sheet_name]
-    preferred_terms = ["credit scope", "creditscope", "contra costa", "public"]
+
+    scored = []
+    for name in workbook.sheetnames:
+        norm_name = normalize_label(name)
+        ws = workbook[name]
+        score = _sheet_raw_label_score(ws)
+        if "credit scope" in norm_name or "creditscope" in norm_name:
+            score += 5
+        if "fin" in norm_name or "financial" in norm_name:
+            score += 3
+        if norm_name in {"public", "scorecard"}:
+            score -= 8
+        scored.append((score, name))
+    scored.sort(reverse=True)
+    if scored and scored[0][0] > 0:
+        return workbook[scored[0][1]]
+
+    preferred_terms = ["credit scope", "creditscope", "fin", "financial", "contra costa"]
     for term in preferred_terms:
         for name in workbook.sheetnames:
             if term in normalize_label(name):
