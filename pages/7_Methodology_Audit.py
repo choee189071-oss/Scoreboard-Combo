@@ -30,6 +30,21 @@ except Exception as exc:  # pragma: no cover - Streamlit display path
     st.stop()
 
 
+def _clean_display_df(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    for col in ["score_label", "warning", "error", "missing_fields"]:
+        if col in out.columns:
+            out[col] = out[col].replace({"nan": "", "None": "", "NaN": ""}).fillna("")
+    return out
+
+
+def _show_df_or_info(df: pd.DataFrame, empty_message: str) -> None:
+    if isinstance(df, pd.DataFrame) and not df.empty:
+        st.dataframe(_clean_display_df(df), use_container_width=True, hide_index=True)
+    else:
+        st.info(empty_message)
+
+
 st.set_page_config(page_title="Methodology Audit", page_icon="⑦", layout="wide")
 init_state()
 page_header(
@@ -186,19 +201,19 @@ if isinstance(result, dict) and result.get("methodology_id") == methodology_id:
     fe = rating_output.get("factor_engine_output", {}) if isinstance(rating_output, dict) else {}
     with tabs[2]:
         df = fe.get("metric_scores", pd.DataFrame()) if isinstance(fe, dict) else pd.DataFrame()
-        st.dataframe(df, use_container_width=True, hide_index=True) if isinstance(df, pd.DataFrame) and not df.empty else st.info("No metric scores.")
+        _show_df_or_info(df, "No metric scores.")
     with tabs[3]:
         df = fe.get("factor_scores", pd.DataFrame()) if isinstance(fe, dict) else pd.DataFrame()
-        st.dataframe(df, use_container_width=True, hide_index=True) if isinstance(df, pd.DataFrame) and not df.empty else st.info("No factor scores.")
+        _show_df_or_info(df, "No factor scores.")
     with tabs[4]:
         df = fe.get("section_scores", pd.DataFrame()) if isinstance(fe, dict) else pd.DataFrame()
-        st.dataframe(df, use_container_width=True, hide_index=True) if isinstance(df, pd.DataFrame) and not df.empty else st.info("No section scores.")
+        _show_df_or_info(df, "No section scores.")
     with tabs[5]:
         auto_scores = rating_output.get("scored_metric_overrides", {}) if isinstance(rating_output, dict) else {}
         if auto_scores:
             auto_df = pd.DataFrame.from_dict(auto_scores, orient="index")
             auto_df.insert(0, "formula_id", auto_df.index)
-            st.dataframe(auto_df.reset_index(drop=True), use_container_width=True, hide_index=True)
+            st.dataframe(_clean_display_df(auto_df.reset_index(drop=True)), use_container_width=True, hide_index=True)
         else:
             st.info("No automatic threshold scores were produced.")
 
