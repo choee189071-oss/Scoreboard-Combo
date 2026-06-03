@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+import re
 
 import pandas as pd
 import streamlit as st
@@ -22,7 +23,6 @@ try:
         manual_score_frame,
         run_methodology_test,
     )
-    from engine.rating_engine import summarize_rating_output
 except Exception as exc:  # pragma: no cover - Streamlit display path
     st.set_page_config(page_title="Methodology Audit", page_icon="⑦", layout="wide")
     st.error("Could not import methodology audit tools.")
@@ -43,6 +43,46 @@ def _show_df_or_info(df: pd.DataFrame, empty_message: str) -> None:
         st.dataframe(_clean_display_df(df), use_container_width=True, hide_index=True)
     else:
         st.info(empty_message)
+
+
+def _slug(value: str) -> str:
+    text = str(value).strip().lower()
+    text = re.sub(r"[^a-z0-9]+", "_", text)
+    return re.sub(r"_+", "_", text).strip("_")
+
+
+def _rating_summary_for_methodology(rating_output: dict) -> pd.DataFrame:
+    rr = rating_output.get("rating_result", {}) if isinstance(rating_output, dict) else {}
+    fe = rating_output.get("factor_engine_output", {}) if isinstance(rating_output, dict) else {}
+    methodology_id = str(rr.get("methodology_id", ""))
+
+    row = {
+        "methodology_id": rr.get("methodology_id"),
+        "agency": rr.get("agency"),
+        "rating_style": rr.get("rating_style"),
+        "overall_score": rr.get("overall_score"),
+        "anchor": rr.get("anchor"),
+        "sacp": rr.get("sacp"),
+        "icr": rr.get("icr"),
+        "indicative_rating": rr.get("indicative_rating"),
+        "coverage_status": rr.get("coverage_status"),
+    }
+
+    if methodology_id in {"sp_water_sewer", "sp_community_college_go"}:
+        row["enterprise_score"] = rr.get("enterprise_score")
+        row["financial_score"] = rr.get("financial_score")
+    elif methodology_id in {"sp_local_gov_k12", "sp_local_gov", "sp_us_government_2024"}:
+        row["icp_score"] = rr.get("icp_score")
+        row["institutional_framework_score"] = rr.get("institutional_framework_score")
+    elif methodology_id.startswith("moodys"):
+        factor_df = fe.get("factor_scores", pd.DataFrame()) if isinstance(fe, dict) else pd.DataFrame()
+        if isinstance(factor_df, pd.DataFrame) and not factor_df.empty:
+            for _, factor_row in factor_df.iterrows():
+                factor = str(factor_row.get("factor", "")).strip()
+                if factor:
+                    row[f"{_slug(factor)}_score"] = factor_row.get("factor_score")
+
+    return _clean_display_df(pd.DataFrame([row]))
 
 
 st.set_page_config(page_title="Methodology Audit", page_icon="⑦", layout="wide")
@@ -184,7 +224,7 @@ if isinstance(result, dict) and result.get("methodology_id") == methodology_id:
     tabs = st.tabs(["Rating", "Formula Results", "Metric Scores", "Factor Scores", "Section Scores", "Auto Scores"])
 
     with tabs[0]:
-        st.dataframe(summarize_rating_output(rating_output), use_container_width=True, hide_index=True)
+        st.dataframe(_rating_summary_for_methodology(rating_output), use_container_width=True, hide_index=True)
         warnings = rr.get("warnings", []) or []
         if warnings:
             for warning in warnings:
