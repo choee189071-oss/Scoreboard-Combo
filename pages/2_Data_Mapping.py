@@ -15,7 +15,7 @@ if str(PROJECT_ROOT) not in sys.path:
 try:
     from engine.calculator_engine import load_formula_library, parse_required_fields
     from engine.factor_engine import load_factor_template
-    from engine.mapping_engine import map_uploaded_file, merge_issuer_data
+    from engine.mapping_engine import map_creditscope_workbook, map_uploaded_file, merge_issuer_data
 except Exception as exc:  # pragma: no cover - Streamlit display path
     st.set_page_config(page_title="Data Mapping", page_icon="②", layout="wide")
     st.error("Could not import mapping/calculator engines.")
@@ -63,6 +63,10 @@ def _default_value_for_field(field_name: str) -> Any:
         "us_median_income": 80000.0,
         "county_ebi": 120.0,
         "us_ebi": 100.0,
+        "county_gdp_current": 105.0,
+        "county_gdp_prior": 100.0,
+        "us_gdp_current": 103.0,
+        "us_gdp_prior": 100.0,
     }
     return defaults.get(field_name, None)
 
@@ -71,6 +75,15 @@ def _required_fields_for_methodology(methodology_id: str) -> pd.DataFrame:
     formulas = load_formula_library("config/formula_library.csv")
     template = load_factor_template(methodology_id, templates_dir="templates")
     formula_ids = set(template["formula_id"].dropna().astype(str))
+    try:
+        thresholds = pd.read_csv("config/scoring_thresholds.csv")
+        related_thresholds = thresholds[thresholds["methodology_id"].astype(str) == str(methodology_id)]
+        secondary_ids = set(related_thresholds["secondary_formula_id"].dropna().astype(str))
+        secondary_ids.discard("")
+        secondary_ids.discard("nan")
+        formula_ids |= secondary_ids
+    except Exception:
+        pass
     rows: List[Dict[str, Any]] = []
     for _, formula in formulas[formulas["formula_id"].astype(str).isin(formula_ids)].iterrows():
         for field in parse_required_fields(formula.get("required_data", "")):
@@ -97,3 +110,126 @@ def _required_fields_for_methodology(methodology_id: str) -> pd.DataFrame:
         .reset_index(drop=True)
     )
 
+
+def _clean_edited_values(df: pd.DataFrame) -> Dict[str, Any]:
+    data: Dict[str, Any] = {}
+    for _, row in df.iterrows():
+        key = str(row.get("field_name", "")).strip()
+        raw_value = row.get("value")
+        if not key or raw_value in [None, ""]:
+            continue
+        try:
+            data[key] = float(raw_value)
+        except Exception:
+            data[key] = raw_value
+    return data
+
+
+st.divider()
+st.subheader("Mapped Source Files")
+st.caption("CSV/XLSX uploads are mapped through engine.mapping_engine. PDF parsing is intentionally left for the next parser layer.")
+
+source_options = {
+    "creditscope": ("CreditScope", "CreditScope CSV/XLSX"),
+    "ipeds": ("IPEDS_Excel", "IPEDS Excel"),
+    "os": ("OS", "Official Statement table extract"),
+    "acfr": ("ACFR", "ACFR / Audit table extract"),
+}
+
+mapped_outputs: List[Dict[str, Any]] = []
+match_reports: List[pd.DataFrame] = []
+cols = st.columns(4)
+for i, (key, (source_name, label)) in enumerate(source_options.items()):
+    with cols[i]:
+        uploaded = st.file_uploader(label, type=["csv", "xlsx", "xls"], key=f"upload_{key}")
+        if uploaded is None:
+            continue
+        try:
+            if source_name == "CreditScope" and uploaded.name.lower().endswith((".xlsx", ".xls")):
+                source_data, report = map_creditscope_workbook(
+                    uploaded_file=uploaded,
+                    mapping_path="config/field_mapping.csv",
+                    value_col=2,
+                )
+                if not source_data:
+                    uploaded.seek(0)
+                    source_data, report = map_uploaded_file(
+                        uploaded_file=uploaded,
+                        source_name=source_name,
+                        mapping_path="config/field_mapping.csv",
+                    )
+            else:
+                source_data, report = map_uploaded_file(
+                    uploaded_file=uploaded,
+                    source_name=source_name,
+                    mapping_path="config/field_mapping.csv",
+                )
+            st.session_state["uploaded_sources"][key] = uploaded.name
+            st.success(f"{len(source_data)} fields mapped")
+            mapped_outputs.append(source_data)
+            if not report.empty:
+                report.insert(0, "uploaded_file", uploaded.name)
+                match_reports.append(report)
+        except Exception as exc:
+            st.error(f"Could not map {uploaded.name}.")
+            st.exception(exc)
+
+if match_reports:
+    with st.expander("Source mapping reports", expanded=True):
+        st.dataframe(pd.concat(match_reports, ignore_index=True), use_container_width=True, hide_index=True)
+
+st.divider()
+st.subheader("Manual Canonical Fields")
+st.caption("These fields come from the selected methodology template and formula_library.csv.")
+
+try:
+    required_fields = _required_fields_for_methodology(methodology_id)
+except Exception as exc:
+    st.warning(f"Could not load required fields for {methodology_id}: {exc}")
+    required_fields = pd.DataFrame(columns=["field_name", "used_by", "category"])
+
+existing = st.session_state.get("issuer_data", {}) or {}
+rows = []
+for _, row in required_fields.iterrows():
+    field_name = str(row["field_name"])
+    rows.append(
+        {
+            "field_name": field_name,
+            "value": existing.get(field_name, _default_value_for_field(field_name)),
+            "used_by": row.get("used_by", ""),
+            "category": row.get("category", ""),
+        }
+    )
+
+manual_df = pd.DataFrame(rows)
+if not manual_df.empty:
+    manual_df["value"] = manual_df["value"].apply(lambda x: "" if x is None else str(x))
+if manual_df.empty:
+    st.info("No formula-driven raw fields found for the selected methodology.")
+    edited = manual_df
+else:
+    edited = st.data_editor(
+        manual_df,
+        use_container_width=True,
+        hide_index=True,
+        num_rows="fixed",
+        column_config={
+            "value": st.column_config.TextColumn("value"),
+            "used_by": st.column_config.TextColumn("used_by", disabled=True),
+            "category": st.column_config.TextColumn("category", disabled=True),
+        },
+    )
+
+if st.button("Save issuer_data", type="primary"):
+    manual_data = _clean_edited_values(edited)
+    issuer_data = merge_issuer_data(*mapped_outputs, manual_data, overwrite=True)
+    st.session_state["issuer_data"] = issuer_data
+    st.session_state["source_match_reports"] = pd.concat(match_reports, ignore_index=True) if match_reports else pd.DataFrame()
+    st.success(f"Saved {len(issuer_data)} canonical fields. Go to Calculators next.")
+
+with st.expander("Current issuer_data", expanded=False):
+    data = st.session_state.get("issuer_data", {}) or {}
+    if data:
+        st.json(data)
+    else:
+        st.info("No issuer_data saved yet.")
