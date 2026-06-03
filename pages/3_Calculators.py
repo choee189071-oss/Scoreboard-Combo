@@ -46,6 +46,15 @@ except Exception as exc:
     st.stop()
 
 template_formula_ids = set(template["formula_id"].dropna().astype(str))
+try:
+    thresholds = pd.read_csv("config/scoring_thresholds.csv")
+    related_thresholds = thresholds[thresholds["methodology_id"].astype(str) == str(methodology_id)]
+    secondary_ids = set(related_thresholds["secondary_formula_id"].dropna().astype(str))
+    secondary_ids.discard("")
+    secondary_ids.discard("nan")
+    template_formula_ids |= secondary_ids
+except Exception:
+    pass
 method_formula_df = all_formula_df[all_formula_df["formula_id"].astype(str).isin(template_formula_ids)].copy()
 
 summary = summarize_calculation_results(method_formula_df)
