@@ -141,10 +141,28 @@ def methodology_formula_ids(
     }
 
 
-def _source_lookup(field_mapping_path: str | Path = "config/field_mapping.csv") -> Dict[str, str]:
+def _source_lookup(
+    field_mapping_path: str | Path = "config/field_mapping.csv",
+    data_dictionary_path: str | Path = "config/data_dictionary.csv",
+) -> Dict[str, str]:
+    dictionary = _read_csv_if_exists(data_dictionary_path)
+    out: Dict[str, str] = {}
+    if not dictionary.empty and {"field_name", "preferred_source", "fallback_source"} <= set(dictionary.columns):
+        for _, row in dictionary.iterrows():
+            field_name = str(row.get("field_name", "")).strip()
+            if not field_name:
+                continue
+            sources = []
+            for col in ["preferred_source", "fallback_source"]:
+                value = str(row.get(col, "") or "").strip()
+                if value and value.lower() != "nan":
+                    sources.extend(part.strip() for part in value.split("|") if part.strip())
+            if sources:
+                out[field_name] = "|".join(dict.fromkeys(sources))
+
     mapping = _read_csv_if_exists(field_mapping_path)
     if mapping.empty or "field_name" not in mapping.columns or "source_name" not in mapping.columns:
-        return {}
+        return out
     grouped = (
         mapping.assign(
             field_name=mapping["field_name"].astype(str).str.strip(),
@@ -154,7 +172,9 @@ def _source_lookup(field_mapping_path: str | Path = "config/field_mapping.csv") 
         .apply(lambda s: "|".join(sorted(set(x for x in s if x))))
         .to_dict()
     )
-    return grouped
+    for field_name, sources in grouped.items():
+        out.setdefault(field_name, sources)
+    return out
 
 
 def _field_source(field_name: str, source_lookup: Mapping[str, str], template_source: str = "") -> str:
