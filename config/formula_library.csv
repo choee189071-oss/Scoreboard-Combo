@@ -42,7 +42,7 @@ gov_operating_margin_3yr_avg,Governmental Operating Margin 3Y Average,avg_3yr((g
 
 coverage_ratio,All-In Coverage Ratio,(operating_revenue-operating_expense)/mads,operating_revenue;operating_expense;mads,FinancialPerformance
 
-operating_history_ratio,Operating History Ratio,avg_5yr((operating_revenue-operating_expense)/operating_revenue),operating_revenue;operating_expense,FinancialPerformance
+operating_history_ratio,Operating History Ratio,avg_5yr(operating_revenue/operating_expense),operating_revenue;operating_expense,FinancialPerformance
 
 available_fund_balance_ratio,(Committed+Assigned+Unassigned)/Revenue,(committed_fund_balance+assigned_fund_balance+unassigned_fund_balance)/governmental_revenue,committed_fund_balance;assigned_fund_balance;unassigned_fund_balance;governmental_revenue,Liquidity
 

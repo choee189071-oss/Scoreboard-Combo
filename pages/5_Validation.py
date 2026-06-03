@@ -18,7 +18,11 @@ Supported validation modes
    - Upload a CSV/XLSX with formula_id + value/status/numeric_score columns.
    - The rating engine will score available metrics, aggregate factors, and produce a rating.
 
-3. Manual metric-score validation
+3. Raw-value validation
+   - Load editable raw input fixtures.
+   - Run calculator_engine.calculate_all_formulas() and compare model values against official scorecard values.
+
+4. Manual metric-score validation
    - Loads the selected methodology template.
    - You can paste/enter numeric scores directly for each formula_id.
    - Useful when replicating an official scorecard row-by-row.
@@ -58,6 +62,12 @@ try:
         load_fixture_catalog,
         load_official_fixture,
         official_fixture_report,
+    )
+    from engine.raw_value_validation import (
+        list_raw_input_fixture_files,
+        load_raw_fixture_catalog,
+        load_raw_input_fixture,
+        raw_value_validation_report,
     )
 except Exception as exc:  # pragma: no cover - Streamlit display path
     st.set_page_config(page_title="Validation", page_icon="🧪", layout="wide")
@@ -257,6 +267,7 @@ mode = st.radio(
     "Validation mode",
     [
         "Official fixture comparison",
+        "Raw-value validation",
         "Quick rating check",
         "Formula-results upload",
         "Manual metric-score entry",
@@ -342,6 +353,133 @@ if mode == "Official fixture comparison":
                         st.dataframe(current_comparison, use_container_width=True, hide_index=True)
         except Exception as exc:
             st.error("Could not run fixture comparison.")
+            st.exception(exc)
+
+elif mode == "Raw-value validation":
+    st.subheader("Raw-value validation")
+    st.write(
+        "Load editable raw inputs, run the calculator formulas, and compare model-calculated values against the official scorecard values."
+    )
+
+    raw_dir = PROJECT_ROOT / "config" / "validation_raw_inputs"
+    fixture_dir = PROJECT_ROOT / "config" / "validation_fixtures"
+    raw_fixtures = list_raw_input_fixture_files(raw_dir)
+    official_fixtures = list_official_fixture_files(fixture_dir)
+
+    if not raw_fixtures:
+        st.info("No raw input fixtures found under config/validation_raw_inputs.")
+    elif not official_fixtures:
+        st.info("No official fixtures found under config/validation_fixtures.")
+    else:
+        raw_catalog = load_raw_fixture_catalog(raw_dir)
+        if not raw_catalog.empty:
+            with st.expander("Raw fixture catalog", expanded=False):
+                st.dataframe(raw_catalog, use_container_width=True, hide_index=True)
+
+        raw_keys = list(raw_fixtures.keys())
+        official_keys = list(official_fixtures.keys())
+        default_raw_key = "contra_costa_moodys_ccd_go" if "contra_costa_moodys_ccd_go" in raw_keys else raw_keys[0]
+        default_official_key = default_raw_key if default_raw_key in official_fixtures else official_keys[0]
+
+        c1, c2 = st.columns(2)
+        selected_raw = c1.selectbox(
+            "Raw input fixture",
+            options=raw_keys,
+            index=raw_keys.index(default_raw_key),
+        )
+        selected_official = c2.selectbox(
+            "Official scorecard fixture",
+            options=official_keys,
+            index=official_keys.index(default_official_key),
+        )
+
+        try:
+            raw_fixture = load_raw_input_fixture(raw_fixtures[selected_raw])
+            official_fixture = load_official_fixture(official_fixtures[selected_official])
+            fixture_rating = str(official_fixture["official_rating"].iloc[0])
+            fixture_score = float(official_fixture["official_weighted_score"].iloc[0])
+
+            st.caption("You can edit the value column before running. Use pipes for time series, for example 100|110|120.")
+            edited_raw = st.data_editor(
+                raw_fixture,
+                use_container_width=True,
+                hide_index=True,
+                num_rows="fixed",
+                column_config={
+                    "value": st.column_config.TextColumn("value"),
+                    "notes": st.column_config.TextColumn("notes"),
+                },
+                key=f"raw_fixture_editor_{selected_raw}",
+            )
+
+            report_key = f"{selected_raw}|{selected_official}"
+            if st.session_state.get("raw_value_validation_key") != report_key:
+                st.session_state.pop("raw_value_validation_report", None)
+                st.session_state["raw_value_validation_key"] = report_key
+
+            if st.button("Run raw-value validation", type="primary"):
+                report = raw_value_validation_report(
+                    edited_raw,
+                    official_fixture,
+                    formula_library_path="config/formula_library.csv",
+                    thresholds_path=threshold_path,
+                    templates_dir="templates",
+                )
+                st.session_state["validation_output"] = report["output"]
+                st.session_state["raw_value_validation_report"] = report
+                st.session_state["raw_value_validation_key"] = report_key
+
+            report = st.session_state.get("raw_value_validation_report")
+            if isinstance(report, dict):
+                value_comparison = report["value_comparison"]
+                score_comparison = report["score_comparison"]
+                output = report["output"]
+
+                status_counts = value_comparison["value_status"].value_counts().to_dict() if not value_comparison.empty else {}
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Value Matches", int(status_counts.get("match", 0)))
+                c2.metric("Value Mismatches", int(status_counts.get("mismatch", 0)))
+                c3.metric("Manual Skips", int(status_counts.get("manual_skip", 0)))
+                c4.metric("Model Missing", int(status_counts.get("model_missing", 0)))
+
+                _show_rating_result(output, benchmark_rating=fixture_rating, benchmark_score=fixture_score)
+
+                tab1, tab2, tab3, tab4, tab5 = st.tabs(
+                    ["Value Comparison", "Formula Results", "Auto Score Comparison", "Raw Inputs", "Downloads"]
+                )
+                with tab1:
+                    st.dataframe(value_comparison, use_container_width=True, hide_index=True)
+                with tab2:
+                    st.dataframe(report["formula_results"], use_container_width=True, hide_index=True)
+                with tab3:
+                    if score_comparison.empty:
+                        st.info("No auto-score comparison is available.")
+                    else:
+                        st.dataframe(score_comparison, use_container_width=True, hide_index=True)
+                with tab4:
+                    st.dataframe(report["raw_inputs"], use_container_width=True, hide_index=True)
+                with tab5:
+                    st.download_button(
+                        "Download raw value comparison CSV",
+                        data=value_comparison.to_csv(index=False).encode("utf-8"),
+                        file_name="raw_value_comparison.csv",
+                        mime="text/csv",
+                    )
+                    st.download_button(
+                        "Download raw formula results CSV",
+                        data=report["formula_results"].to_csv(index=False).encode("utf-8"),
+                        file_name="raw_formula_results.csv",
+                        mime="text/csv",
+                    )
+                    if not score_comparison.empty:
+                        st.download_button(
+                            "Download auto score comparison CSV",
+                            data=score_comparison.to_csv(index=False).encode("utf-8"),
+                            file_name="raw_auto_score_comparison.csv",
+                            mime="text/csv",
+                        )
+        except Exception as exc:
+            st.error("Could not run raw-value validation.")
             st.exception(exc)
 
 elif mode == "Quick rating check":
