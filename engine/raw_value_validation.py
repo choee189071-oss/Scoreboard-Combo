@@ -42,6 +42,17 @@ SOURCE_PENDING_TYPES = {
     "source_pending",
     "source_review",
 }
+SCORECARD_IMPLIED_TYPES = {
+    "scorecard_implied",
+    "official_implied",
+    "fixture_implied",
+}
+SCORING_MODE_OFFICIAL_ASSISTED = "official_assisted"
+SCORING_MODE_INDEPENDENT = "independent"
+SUPPORTED_SCORING_MODES = {
+    SCORING_MODE_OFFICIAL_ASSISTED,
+    SCORING_MODE_INDEPENDENT,
+}
 VALUE_COMPARISON_OVERRIDES: Dict[tuple[str, str], Dict[str, float]] = {
     ("moodys_ccd_go", "tax_base_size"): {"model_value_scale": 0.001, "tolerance": 1.0},
     ("moodys_ccd_go", "full_value_per_capita"): {"tolerance": 1.0},
@@ -119,6 +130,51 @@ def raw_fixture_to_issuer_data(raw_fixture: pd.DataFrame) -> Dict[str, Any]:
             continue
         issuer_data[field] = _parse_raw_value(row.get("value"))
     return issuer_data
+
+
+def _split_source_types(value: Any) -> list[str]:
+    raw = str(value or "").strip()
+    if not raw:
+        return []
+    return [part.strip().lower() for part in raw.replace(";", "|").split("|") if part.strip()]
+
+
+def raw_source_quality_summary(raw_fixture: pd.DataFrame) -> pd.DataFrame:
+    """Summarize whether raw fixture rows are independent, implied, or pending."""
+    if raw_fixture.empty or "source_type" not in raw_fixture.columns:
+        return pd.DataFrame()
+
+    rows = []
+    for _, row in raw_fixture.iterrows():
+        source_types = _split_source_types(row.get("source_type", ""))
+        if not source_types:
+            source_types = ["unspecified"]
+        for source_type in source_types:
+            if source_type in SOURCE_PENDING_TYPES:
+                category = "source_pending"
+            elif source_type in SCORECARD_IMPLIED_TYPES:
+                category = "scorecard_implied"
+            else:
+                category = "independent_source"
+            rows.append(
+                {
+                    "source_type": source_type,
+                    "source_category": category,
+                    "field_name": str(row.get("field_name", "")).strip(),
+                }
+            )
+
+    if not rows:
+        return pd.DataFrame()
+
+    summary = (
+        pd.DataFrame(rows)
+        .groupby(["source_category", "source_type"], as_index=False)
+        .agg(raw_field_count=("field_name", "nunique"))
+        .sort_values(["source_category", "source_type"])
+        .reset_index(drop=True)
+    )
+    return summary
 
 
 def _template_formula_ids(methodology_id: str, templates_dir: str | Path) -> list[str]:
@@ -219,8 +275,52 @@ def _field_source_types(raw_fixture: pd.DataFrame, fields: Iterable[str]) -> lis
         raw = str(match.iloc[0].get("source_type", "") or "").strip()
         if not raw:
             continue
-        out.extend(part.strip().lower() for part in raw.replace(";", "|").split("|") if part.strip())
+        out.extend(_split_source_types(raw))
     return out
+
+
+def formula_source_audit(
+    raw_fixture: pd.DataFrame,
+    official_fixture: pd.DataFrame,
+    formula_library_path: str | Path = "config/formula_library.csv",
+) -> pd.DataFrame:
+    """Classify each official scorecard metric by data-source readiness."""
+    if raw_fixture.empty or official_fixture.empty:
+        return pd.DataFrame()
+
+    required_fields = _required_fields_by_formula(formula_library_path)
+    manual_formula_ids = _manual_formula_ids_from_library(formula_library_path)
+    rows = []
+    raw_fields = set(raw_fixture["field_name"].dropna().astype(str).str.strip())
+    for _, row in official_fixture.iterrows():
+        fid = str(row.get("formula_id", "")).strip()
+        fields = required_fields.get(fid, [])
+        missing_fields = [field for field in fields if field not in raw_fields]
+        source_types = set(_field_source_types(raw_fixture, fields))
+
+        if fid in manual_formula_ids:
+            status = "manual"
+        elif missing_fields:
+            status = "raw_field_missing"
+        elif source_types & SOURCE_PENDING_TYPES:
+            status = "source_pending"
+        elif source_types & SCORECARD_IMPLIED_TYPES:
+            status = "scorecard_implied"
+        else:
+            status = "independent_source"
+
+        rows.append(
+            {
+                "formula_id": fid,
+                "metric": row.get("metric", ""),
+                "source_quality_status": status,
+                "required_fields": ";".join(fields),
+                "missing_raw_fields": ";".join(missing_fields),
+                "raw_source_types": _source_summary(raw_fixture, fields, "source_type"),
+                "raw_source_cells": _source_summary(raw_fixture, fields, "source_cell"),
+            }
+        )
+    return pd.DataFrame(rows)
 
 
 def _source_pending_formula_ids(
@@ -453,6 +553,7 @@ def raw_value_validation_report(
     formula_library_path: str | Path = "config/formula_library.csv",
     thresholds_path: str | Path = "config/scoring_thresholds.csv",
     templates_dir: str | Path = "templates",
+    scoring_mode: str = SCORING_MODE_OFFICIAL_ASSISTED,
 ) -> Dict[str, Any]:
     if isinstance(raw_fixture, (str, Path)):
         raw_df = load_raw_input_fixture(raw_fixture)
@@ -462,6 +563,8 @@ def raw_value_validation_report(
         raise ValueError("Raw input fixture is empty.")
     if official_fixture.empty:
         raise ValueError("Official fixture is empty.")
+    if scoring_mode not in SUPPORTED_SCORING_MODES:
+        raise ValueError(f"Unsupported raw validation scoring_mode: {scoring_mode}")
 
     methodology_id = str(raw_df["methodology_id"].iloc[0]).strip()
     formula_results = calculate_template_formulas_from_raw(
@@ -470,19 +573,28 @@ def raw_value_validation_report(
         templates_dir=templates_dir,
         thresholds_path=thresholds_path,
     )
-    manual_scores = _manual_scores_from_fixture(
-        formula_results,
-        official_fixture,
-        formula_library_path=formula_library_path,
-    )
-    manual_scores.update(
-        _official_scores_for_source_pending(
+    manual_score_overrides: Dict[str, Dict[str, Any]] = {}
+    source_pending_score_overrides: Dict[str, Dict[str, Any]] = {}
+    if scoring_mode == SCORING_MODE_OFFICIAL_ASSISTED:
+        manual_score_overrides = _manual_scores_from_fixture(
+            formula_results,
+            official_fixture,
+            formula_library_path=formula_library_path,
+        )
+        source_pending_score_overrides = _official_scores_for_source_pending(
             raw_df,
             official_fixture,
             formula_library_path=formula_library_path,
             thresholds_path=thresholds_path,
         )
-    )
+    manual_scores = {**manual_score_overrides, **source_pending_score_overrides}
+    override_rows = []
+    for fid, score in manual_score_overrides.items():
+        override_rows.append({"formula_id": fid, "override_source": "official_manual_score", **score})
+    for fid, score in source_pending_score_overrides.items():
+        override_rows.append({"formula_id": fid, "override_source": "official_source_pending_score", **score})
+    official_score_overrides = pd.DataFrame(override_rows)
+
     output = run_rating_engine(
         methodology_id=methodology_id,
         formula_results=formula_results,
@@ -499,10 +611,18 @@ def raw_value_validation_report(
     score_comparison = compare_auto_scores_to_official(output, official_fixture)
     rating_summary = summarize_rating_output(output)
     return {
+        "scoring_mode": scoring_mode,
         "raw_inputs": raw_df,
         "issuer_data": raw_fixture_to_issuer_data(raw_df),
         "formula_results": formula_results,
         "manual_scores": manual_scores,
+        "official_score_overrides": official_score_overrides,
+        "source_quality_summary": raw_source_quality_summary(raw_df),
+        "formula_source_audit": formula_source_audit(
+            raw_df,
+            official_fixture,
+            formula_library_path=formula_library_path,
+        ),
         "output": output,
         "value_comparison": value_comparison,
         "score_comparison": score_comparison,

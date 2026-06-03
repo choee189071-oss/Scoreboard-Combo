@@ -396,6 +396,23 @@ elif mode == "Raw-value validation":
             options=official_keys,
             index=official_keys.index(default_official_key),
         )
+        scoring_mode_label = st.radio(
+            "Scoring run mode",
+            options=[
+                "Official-assisted aggregation",
+                "Independent strict model run",
+            ],
+            horizontal=True,
+            help=(
+                "Official-assisted uses official fixture scores for manual/source-pending rows "
+                "to test aggregation. Independent strict mode uses only model-derived scores."
+            ),
+        )
+        scoring_mode = (
+            "independent"
+            if scoring_mode_label == "Independent strict model run"
+            else "official_assisted"
+        )
 
         try:
             raw_fixture = load_raw_input_fixture(raw_fixtures[selected_raw])
@@ -455,7 +472,7 @@ elif mode == "Raw-value validation":
                 ),
             )
 
-            report_key = f"{selected_raw}|{selected_official}"
+            report_key = f"{selected_raw}|{selected_official}|{scoring_mode}"
             if st.session_state.get("raw_value_validation_key") != report_key:
                 st.session_state.pop("raw_value_validation_report", None)
                 st.session_state["raw_value_validation_key"] = report_key
@@ -467,6 +484,7 @@ elif mode == "Raw-value validation":
                     formula_library_path="config/formula_library.csv",
                     thresholds_path=threshold_path,
                     templates_dir="templates",
+                    scoring_mode=scoring_mode,
                 )
                 st.session_state["validation_output"] = report["output"]
                 st.session_state["raw_value_validation_report"] = report
@@ -477,6 +495,9 @@ elif mode == "Raw-value validation":
                 value_comparison = report["value_comparison"]
                 score_comparison = report["score_comparison"]
                 output = report["output"]
+                source_summary = report.get("source_quality_summary", pd.DataFrame())
+                formula_source_audit = report.get("formula_source_audit", pd.DataFrame())
+                official_score_overrides = report.get("official_score_overrides", pd.DataFrame())
 
                 status_counts = value_comparison["value_status"].value_counts().to_dict() if not value_comparison.empty else {}
                 c1, c2, c3, c4 = st.columns(4)
@@ -485,23 +506,55 @@ elif mode == "Raw-value validation":
                 c3.metric("Manual / Source Pending", int(status_counts.get("manual_skip", 0)) + int(status_counts.get("source_pending", 0)))
                 c4.metric("Model Missing", int(status_counts.get("model_missing", 0)))
 
+                def _source_count(category: str) -> int:
+                    if source_summary.empty or "source_category" not in source_summary.columns:
+                        return 0
+                    rows = source_summary[source_summary["source_category"].astype(str).eq(category)]
+                    if rows.empty or "raw_field_count" not in rows.columns:
+                        return 0
+                    return int(pd.to_numeric(rows["raw_field_count"], errors="coerce").fillna(0).sum())
+
+                s1, s2, s3, s4 = st.columns(4)
+                s1.metric("Run Mode", "Strict" if report.get("scoring_mode") == "independent" else "Assisted")
+                s2.metric("Official Score Overrides", 0 if official_score_overrides.empty else len(official_score_overrides))
+                s3.metric("Independent Raw Fields", _source_count("independent_source"))
+                s4.metric("Pending / Implied Fields", _source_count("source_pending") + _source_count("scorecard_implied"))
+
                 _show_rating_result(output, benchmark_rating=fixture_rating, benchmark_score=fixture_score)
 
-                tab1, tab2, tab3, tab4, tab5 = st.tabs(
-                    ["Value Comparison", "Formula Results", "Auto Score Comparison", "Raw Inputs", "Downloads"]
+                tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
+                    [
+                        "Value Comparison",
+                        "Source Quality",
+                        "Formula Results",
+                        "Auto Score Comparison",
+                        "Raw Inputs",
+                        "Downloads",
+                    ]
                 )
                 with tab1:
                     st.dataframe(value_comparison, use_container_width=True, hide_index=True)
                 with tab2:
-                    st.dataframe(report["formula_results"], use_container_width=True, hide_index=True)
+                    if source_summary.empty and formula_source_audit.empty:
+                        st.info("No source-quality summary is available.")
+                    else:
+                        if not source_summary.empty:
+                            st.dataframe(source_summary, use_container_width=True, hide_index=True)
+                        if not formula_source_audit.empty:
+                            st.dataframe(formula_source_audit, use_container_width=True, hide_index=True)
+                        if not official_score_overrides.empty:
+                            st.write("Official score overrides used in assisted mode")
+                            st.dataframe(official_score_overrides, use_container_width=True, hide_index=True)
                 with tab3:
+                    st.dataframe(report["formula_results"], use_container_width=True, hide_index=True)
+                with tab4:
                     if score_comparison.empty:
                         st.info("No auto-score comparison is available.")
                     else:
                         st.dataframe(score_comparison, use_container_width=True, hide_index=True)
-                with tab4:
-                    st.dataframe(report["raw_inputs"], use_container_width=True, hide_index=True)
                 with tab5:
+                    st.dataframe(report["raw_inputs"], use_container_width=True, hide_index=True)
+                with tab6:
                     st.download_button(
                         "Download raw value comparison CSV",
                         data=value_comparison.to_csv(index=False).encode("utf-8"),
