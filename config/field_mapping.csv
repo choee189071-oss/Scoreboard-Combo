@@ -6,7 +6,7 @@ county_gdp_current,CreditScope,"County GDP Current|Current County GDP|Gross Coun
 county_gdp_prior,CreditScope,"County GDP Prior|Prior County GDP|Gross County Product Prior|GCP Prior",fuzzy,Prior county GDP if present in uploaded workbook
 us_gdp_current,CreditScope,"US GDP Current|U.S. GDP Current|Current US GDP|Current U.S. GDP",fuzzy,Current U.S. GDP if present in uploaded workbook
 us_gdp_prior,CreditScope,"US GDP Prior|U.S. GDP Prior|Prior US GDP|Prior U.S. GDP",fuzzy,Prior U.S. GDP if present in uploaded workbook
-service_area_population,CreditScope,"Service Area Population|Population|District Population|County Population",fuzzy,Use only if service area population is explicitly provided
+service_area_population,CreditScope,"Service Area Population|Utility Service Area Population|Service Population",fuzzy,Use only if service area population is explicitly provided
 population,CreditScope,"Population|Resident Population|County Population|District Population",fuzzy,Raw population fallback when Census unavailable
 operating_revenue,CreditScope,"Operating Revenue|Operating Revenues|Total Operating Revenue|Operating Income",fuzzy,Raw operating revenue only
 operating_expense,CreditScope,"Operating Expense|Operating Expenses|Total Operating Expense|Operating Expenditures",fuzzy,Raw operating expense only
@@ -20,7 +20,7 @@ fund_balance,CreditScope,"Fund Balance|Total Fund Balance|Governmental Fund Bala
 cash,CreditScope,"Cash|Cash Balance|Cash on Hand",fuzzy,Raw cash
 cash_and_investments,CreditScope,"Cash and Investments|Cash & Investments|Cash + Investments|Unrestricted Cash and Investments",fuzzy,Raw cash plus investments
 net_assets,CreditScope,"Net Assets|Net Position|Total Net Position|Unrestricted Net Position",fuzzy,Raw net assets / net position
-revenue,CreditScope,"Revenue|Revenues|Total Revenue|Total Revenues|Operating Revenue",fuzzy,Raw revenue denominator
+revenue,CreditScope,"Revenue|Revenues|Total Revenue|Total Revenues",fuzzy,Raw revenue denominator
 debt,CreditScope,"Debt|Total Debt|Outstanding Debt|Debt Outstanding",fuzzy,Raw total debt
 long_term_debt,CreditScope,"Long-Term Debt|Long Term Debt|LTD|Long-Term Liabilities Debt",fuzzy,Raw long-term debt
 net_direct_debt,CreditScope,"Net Direct Debt|Direct Debt|Net Debt|Overlapping Direct Debt",fuzzy,Raw net direct debt
