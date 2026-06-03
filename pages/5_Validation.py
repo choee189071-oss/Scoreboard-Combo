@@ -432,8 +432,16 @@ elif mode == "Raw-value validation":
                 raw_fixture = upsert_raw_input_source_row(raw_fixture, census_row)
 
             st.caption("You can edit the value column before running. Use pipes for time series, for example 100|110|120.")
+            raw_fixture_editor = raw_fixture.copy()
+            for editable_text_col in ["value", "notes"]:
+                if editable_text_col in raw_fixture_editor.columns:
+                    raw_fixture_editor[editable_text_col] = (
+                        raw_fixture_editor[editable_text_col]
+                        .fillna("")
+                        .astype(str)
+                    )
             edited_raw = st.data_editor(
-                raw_fixture,
+                raw_fixture_editor,
                 use_container_width=True,
                 hide_index=True,
                 num_rows="fixed",
