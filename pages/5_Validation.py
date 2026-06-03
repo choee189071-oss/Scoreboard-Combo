@@ -402,6 +402,7 @@ elif mode == "Raw-value validation":
             official_fixture = load_official_fixture(official_fixtures[selected_official])
             fixture_rating = str(official_fixture["official_rating"].iloc[0])
             fixture_score = float(official_fixture["official_weighted_score"].iloc[0])
+            raw_fixture_version = raw_fixtures[selected_raw].stat().st_mtime_ns
 
             census_key = f"census_tax_base_population_{selected_raw}"
             if str(raw_fixture["methodology_id"].iloc[0]).strip() in {"moodys_ccd_go", "moodys_k12"}:
@@ -440,7 +441,10 @@ elif mode == "Raw-value validation":
                     "value": st.column_config.TextColumn("value"),
                     "notes": st.column_config.TextColumn("notes"),
                 },
-                key=f"raw_fixture_editor_{selected_raw}_{str(census_row.get('value', 'base')) if census_row else 'base'}",
+                key=(
+                    f"raw_fixture_editor_{selected_raw}_{raw_fixture_version}_"
+                    f"{str(census_row.get('value', 'base')) if census_row else 'base'}"
+                ),
             )
 
             report_key = f"{selected_raw}|{selected_official}"
