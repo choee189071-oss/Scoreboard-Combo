@@ -30,7 +30,7 @@ utility_bill_affordability,Utility Bill Affordability,annual_utility_bill/median
 
 tax_base_size,Tax Base Size,full_value,full_value,TaxBase
 
-full_value_per_capita,Full Value Per Capita,full_value/population,full_value;population,TaxBase
+full_value_per_capita,Full Value Per Capita,full_value/tax_base_population,full_value;tax_base_population,TaxBase
 
 fte_enrollment,FTE Enrollment,fte_enrollment,fte_enrollment,Enrollment
 

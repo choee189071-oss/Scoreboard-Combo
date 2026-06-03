@@ -1,6 +1,6 @@
 source_name,source_type,access_method,structured,requires_upload,requires_api_key,preferred_for,notes
 BEA,API,bea_connector,true,false,true,"GDP;personal_income;regional_income","Use for raw economic data only. Do not import calculated ratios."
-CensusACS,API,census_connector,true,false,true,"population;poverty_rate;median_income;median_family_income","Use ACS raw fields for demographics and income."
+CensusACS,API,census_connector,true,false,true,"population;tax_base_population;service_area_population;poverty_rate;median_income;median_family_income","Use ACS raw fields for demographics and income."
 CreditScope,Upload,creditscope_loader,true,true,false,"full_value;assessed_value;debt;cash;revenue;expense;pension","Use uploaded raw numeric fields only. Do not use CreditScope ratios or derived metrics."
 IPEDS_Excel,Upload,ipeds_excel_loader,true,true,false,"fte_enrollment;enrollment_current;enrollment_3yr_prior","IPEDS is treated as structured Excel upload, not API."
 OS,Document,document_extractor,false,true,false,"mads;annual_utility_bill;debt_schedule","Use only when structured source is unavailable or for OS-specific bond fields."

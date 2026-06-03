@@ -69,6 +69,10 @@ try:
         load_raw_input_fixture,
         raw_value_validation_report,
     )
+    from engine.data_retriever import (
+        fetch_census_tax_base_population,
+        upsert_raw_input_source_row,
+    )
 except Exception as exc:  # pragma: no cover - Streamlit display path
     st.set_page_config(page_title="Validation", page_icon="🧪", layout="wide")
     st.error("Could not import engine modules. Please confirm engine/factor_engine.py and engine/rating_engine.py exist.")
@@ -399,6 +403,33 @@ elif mode == "Raw-value validation":
             fixture_rating = str(official_fixture["official_rating"].iloc[0])
             fixture_score = float(official_fixture["official_weighted_score"].iloc[0])
 
+            census_key = f"census_tax_base_population_{selected_raw}"
+            if str(raw_fixture["methodology_id"].iloc[0]).strip() in {"moodys_ccd_go", "moodys_k12"}:
+                with st.expander("Census API source lookup"):
+                    st.caption("Fetch raw population only. The model still calculates full value per capita itself.")
+                    c1, c2, c3 = st.columns(3)
+                    census_year = c1.number_input("ACS 5-year", min_value=2009, max_value=2025, value=2022, step=1)
+                    state_fips = c2.text_input("State FIPS", value="06")
+                    county_fips = c3.text_input("County FIPS", value="013")
+                    if st.button("Fetch tax_base_population from Census", key=f"fetch_census_{selected_raw}"):
+                        try:
+                            source_value = fetch_census_tax_base_population(
+                                state_fips=state_fips,
+                                county_fips=county_fips,
+                                year=int(census_year),
+                            )
+                            st.session_state[census_key] = source_value.to_raw_input_row()
+                            st.success(
+                                f"Fetched {source_value.value:,.0f} from {source_value.source_label}."
+                            )
+                        except Exception as exc:
+                            st.error("Could not fetch Census population.")
+                            st.exception(exc)
+
+            census_row = st.session_state.get(census_key)
+            if census_row:
+                raw_fixture = upsert_raw_input_source_row(raw_fixture, census_row)
+
             st.caption("You can edit the value column before running. Use pipes for time series, for example 100|110|120.")
             edited_raw = st.data_editor(
                 raw_fixture,
@@ -409,7 +440,7 @@ elif mode == "Raw-value validation":
                     "value": st.column_config.TextColumn("value"),
                     "notes": st.column_config.TextColumn("notes"),
                 },
-                key=f"raw_fixture_editor_{selected_raw}",
+                key=f"raw_fixture_editor_{selected_raw}_{str(census_row.get('value', 'base')) if census_row else 'base'}",
             )
 
             report_key = f"{selected_raw}|{selected_official}"
@@ -439,7 +470,7 @@ elif mode == "Raw-value validation":
                 c1, c2, c3, c4 = st.columns(4)
                 c1.metric("Value Matches", int(status_counts.get("match", 0)))
                 c2.metric("Value Mismatches", int(status_counts.get("mismatch", 0)))
-                c3.metric("Manual Skips", int(status_counts.get("manual_skip", 0)))
+                c3.metric("Manual / Source Pending", int(status_counts.get("manual_skip", 0)) + int(status_counts.get("source_pending", 0)))
                 c4.metric("Model Missing", int(status_counts.get("model_missing", 0)))
 
                 _show_rating_result(output, benchmark_rating=fixture_rating, benchmark_score=fixture_score)

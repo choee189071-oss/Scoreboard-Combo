@@ -17,7 +17,7 @@ fixture so mismatches are data-source findings, not silent failures.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, Iterable, Mapping, Optional
+from typing import Any, Dict, Iterable, Mapping, Optional, Set
 
 import pandas as pd
 
@@ -36,6 +36,12 @@ REQUIRED_RAW_INPUT_COLUMNS = {
 }
 
 DEFAULT_VALUE_TOLERANCE = 0.0001
+SOURCE_PENDING_TYPES = {
+    "manual_source_pending",
+    "manual_pending",
+    "source_pending",
+    "source_review",
+}
 VALUE_COMPARISON_OVERRIDES: Dict[tuple[str, str], Dict[str, float]] = {
     ("moodys_ccd_go", "tax_base_size"): {"model_value_scale": 0.001, "tolerance": 1.0},
     ("moodys_ccd_go", "full_value_per_capita"): {"tolerance": 1.0},
@@ -167,6 +173,34 @@ def _source_summary(raw_fixture: pd.DataFrame, fields: Iterable[str], column: st
     return "; ".join(rows)
 
 
+def _field_source_types(raw_fixture: pd.DataFrame, fields: Iterable[str]) -> list[str]:
+    if "source_type" not in raw_fixture.columns:
+        return []
+    out: list[str] = []
+    for field in fields:
+        match = raw_fixture[raw_fixture["field_name"].astype(str) == str(field)]
+        if match.empty:
+            continue
+        raw = str(match.iloc[0].get("source_type", "") or "").strip()
+        if not raw:
+            continue
+        out.extend(part.strip().lower() for part in raw.replace(";", "|").split("|") if part.strip())
+    return out
+
+
+def _source_pending_formula_ids(
+    raw_fixture: pd.DataFrame,
+    formula_library_path: str | Path = "config/formula_library.csv",
+) -> Set[str]:
+    required_fields = _required_fields_by_formula(formula_library_path)
+    pending: Set[str] = set()
+    for formula_id, fields in required_fields.items():
+        source_types = set(_field_source_types(raw_fixture, fields))
+        if source_types & SOURCE_PENDING_TYPES:
+            pending.add(formula_id)
+    return pending
+
+
 def _manual_scores_from_fixture(formula_results: pd.DataFrame, official_fixture: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
     manual_ids = set(
         formula_results.loc[
@@ -189,6 +223,29 @@ def _manual_scores_from_fixture(formula_results: pd.DataFrame, official_fixture:
             "score_label": str(row.get("official_score_label", "") or ""),
         }
     return manual_scores
+
+
+def _official_scores_for_source_pending(
+    raw_fixture: pd.DataFrame,
+    official_fixture: pd.DataFrame,
+    formula_library_path: str | Path = "config/formula_library.csv",
+) -> Dict[str, Dict[str, Any]]:
+    pending_ids = _source_pending_formula_ids(raw_fixture, formula_library_path)
+    out: Dict[str, Dict[str, Any]] = {}
+    if official_fixture.empty:
+        return out
+    for _, row in official_fixture.iterrows():
+        fid = str(row.get("formula_id", "")).strip()
+        if fid not in pending_ids:
+            continue
+        score = clean_optional_float(row.get("official_score"))
+        if score is None:
+            continue
+        out[fid] = {
+            "numeric_score": score,
+            "score_label": str(row.get("official_score_label", "") or ""),
+        }
+    return out
 
 
 def compare_raw_formula_values_to_official(
@@ -249,7 +306,15 @@ def compare_raw_formula_values_to_official(
             value_status = "match" if value_match else "mismatch"
 
         fields = required_fields.get(fid, [])
+        source_types = set(_field_source_types(raw_fixture, fields))
+        source_pending = bool(source_types & SOURCE_PENDING_TYPES)
         record = row.to_dict()
+        if source_pending:
+            value_status = "source_pending"
+            value_match = None
+            delta = None
+            abs_delta = None
+            relative_delta = None
         record.update(
             {
                 "required_fields": ";".join(fields),
@@ -342,6 +407,13 @@ def raw_value_validation_report(
         templates_dir=templates_dir,
     )
     manual_scores = _manual_scores_from_fixture(formula_results, official_fixture)
+    manual_scores.update(
+        _official_scores_for_source_pending(
+            raw_df,
+            official_fixture,
+            formula_library_path=formula_library_path,
+        )
+    )
     output = run_rating_engine(
         methodology_id=methodology_id,
         formula_results=formula_results,

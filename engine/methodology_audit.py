@@ -77,6 +77,7 @@ BASELINE_FIELD_VALUES: Dict[str, float] = {
     "poverty_rate": 0.10,
     "revenue": 310_000_000.0,
     "service_area_population": 950_000.0,
+    "tax_base_population": 950_000.0,
     "transfers": 0.0,
     "unassigned_fund_balance": 70_000_000.0,
     "us_ebi": 75_000.0,
