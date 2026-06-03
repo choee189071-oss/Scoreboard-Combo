@@ -72,7 +72,7 @@ net_direct_debt_per_capita,Net Direct Debt Per Capita,net_direct_debt/population
 
 debt_to_full_value,Debt To Full Value,net_direct_debt/full_value,net_direct_debt;full_value,Debt
 
-debt_to_revenue,Debt To Revenue,net_direct_debt/revenue,net_direct_debt;revenue,Debt
+debt_to_revenue,Debt To Revenue,net_direct_debt/adjusted_operating_revenue,net_direct_debt;adjusted_operating_revenue,Debt
 
 fixed_cost_burden_ratio,Fixed Cost Burden Ratio,(debt_service+pension_cost+opeb_cost)/governmental_revenue,debt_service;pension_cost;opeb_cost;governmental_revenue,Debt
 
@@ -80,7 +80,7 @@ npl_per_capita,Net Pension Liability Per Capita,net_pension_liability/population
 
 adjusted_npl_to_full_value,Adjusted NPL To Full Value,adjusted_npl/full_value,adjusted_npl;full_value,Pension
 
-adjusted_npl_to_revenue,Adjusted NPL To Revenue,adjusted_npl/revenue,adjusted_npl;revenue,Pension
+adjusted_npl_to_revenue,Adjusted NPL To Revenue,adjusted_npl/adjusted_operating_revenue,adjusted_npl;adjusted_operating_revenue,Pension
 
 long_term_liabilities_ratio,Long-Term Liabilities Ratio,(debt+adjusted_npl+adjusted_opeb)/operating_revenue,debt;adjusted_npl;adjusted_opeb;operating_revenue,Pension
 
