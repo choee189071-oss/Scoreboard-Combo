@@ -98,3 +98,72 @@ st.caption("Only true manual/template qualitative fields should be entered here.
 manual_candidates = template[
     template["source_priority"].astype(str).str.contains("Manual", case=False, na=False)
 ].copy()
+formula_status = formula_df.set_index("formula_id")["status"].to_dict() if "status" in formula_df.columns else {}
+manual_candidates["formula_status"] = manual_candidates["formula_id"].map(formula_status).fillna("missing")
+
+manual_scores: Dict[str, Any] = {}
+if manual_candidates.empty:
+    st.info("No manual qualitative fields found in this template.")
+else:
+    manual_rows = manual_candidates[
+        ["section", "factor", "metric", "formula_id", "formula_status"]
+    ].drop_duplicates("formula_id")
+    manual_rows["numeric_score"] = None
+    manual_rows["score_label"] = ""
+
+    edited_manual = st.data_editor(
+        manual_rows,
+        use_container_width=True,
+        hide_index=True,
+        num_rows="fixed",
+        column_config={
+            "numeric_score": st.column_config.NumberColumn(
+                "numeric_score", min_value=0.0, max_value=30.0, step=0.01
+            ),
+            "score_label": st.column_config.TextColumn("score_label"),
+            "section": st.column_config.TextColumn("section", disabled=True),
+            "factor": st.column_config.TextColumn("factor", disabled=True),
+            "metric": st.column_config.TextColumn("metric", disabled=True),
+            "formula_id": st.column_config.TextColumn("formula_id", disabled=True),
+            "formula_status": st.column_config.TextColumn("formula_status", disabled=True),
+        },
+    )
+
+    for _, row in edited_manual.iterrows():
+        fid = str(row.get("formula_id", "")).strip()
+        if not fid:
+            continue
+        numeric = pd.to_numeric(row.get("numeric_score"), errors="coerce")
+        label = str(row.get("score_label", "") or "").strip()
+        if pd.notna(numeric):
+            manual_scores[fid] = {"numeric_score": float(numeric), "score_label": label}
+        elif label:
+            manual_scores[fid] = {"score_label": label}
+
+benchmark_rating = st.text_input(
+    "Benchmark rating optional",
+    value="Aa1" if methodology_id == "moodys_ccd_go" else "",
+)
+
+if st.button("Run scoreboard", type="primary"):
+    try:
+        output = run_rating_engine(
+            methodology_id=methodology_id,
+            formula_results=formula_df,
+            manual_scores=manual_scores,
+            thresholds_path="config/scoring_thresholds.csv",
+            templates_dir="templates",
+        )
+        st.session_state["rating_output"] = output
+    except Exception as exc:
+        st.error("Rating engine failed.")
+        st.exception(exc)
+        output = None
+
+    if output:
+        _render_rating_output(output, benchmark_rating)
+elif st.session_state.get("rating_output"):
+    st.subheader("Last Scoreboard Output")
+    _render_rating_output(st.session_state["rating_output"], benchmark_rating)
+
+st.info("Use Validation next to compare these metric/factor/rating outputs against the official scorecard.")
