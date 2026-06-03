@@ -36,6 +36,7 @@ from openpyxl import load_workbook
 
 
 DEFAULT_MAPPING_PATH = Path("config/field_mapping.csv")
+DEFAULT_CREDITSCOPE_ROW_MAPPING_PATH = Path("config/creditscope_row_mapping.csv")
 
 CREDITSCOPE_THOUSAND_DOLLAR_FIELDS = {
     "full_value",
@@ -286,6 +287,23 @@ def _scale_creditscope_value(field_name: str, value: Any) -> Any:
     return value
 
 
+def _load_creditscope_row_mapping(path: Union[str, Path] = DEFAULT_CREDITSCOPE_ROW_MAPPING_PATH) -> pd.DataFrame:
+    path = Path(path)
+    if not path.exists():
+        return pd.DataFrame()
+    df = pd.read_csv(path)
+    required = {"field_name", "exact_label", "value_col_offset", "scale"}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"{path} missing required columns: {sorted(missing)}")
+    df = df.copy()
+    df["field_name"] = df["field_name"].astype(str).str.strip()
+    df["exact_label"] = df["exact_label"].astype(str).str.strip()
+    df["value_col_offset"] = pd.to_numeric(df["value_col_offset"], errors="coerce").fillna(0).astype(int)
+    df["scale"] = pd.to_numeric(df["scale"], errors="coerce").fillna(1.0)
+    return df
+
+
 def _best_label_match(
     field_name: str,
     aliases: Iterable[str],
@@ -322,6 +340,7 @@ def _best_label_match(
 def map_creditscope_workbook(
     uploaded_file: Any,
     mapping_path: Union[str, Path] = DEFAULT_MAPPING_PATH,
+    row_mapping_path: Union[str, Path] = DEFAULT_CREDITSCOPE_ROW_MAPPING_PATH,
     sheet_name: Optional[str] = None,
     value_col: int = 2,
     fuzzy_threshold: float = 0.92,
@@ -339,24 +358,55 @@ def map_creditscope_workbook(
     label_values = _sheet_label_value_frame(ws, value_col=value_col)
     mapping = load_mapping_table(mapping_path)
     source_rows = mapping[mapping["source_name"].map(normalize_label) == normalize_label("CreditScope")]
+    exact_mapping = _load_creditscope_row_mapping(row_mapping_path)
 
     issuer_data: Dict[str, Any] = {}
     matches: List[FieldMatch] = []
     labels = label_values["label"].tolist() if not label_values.empty else []
-    by_label = label_values.set_index("label")["value"].to_dict() if not label_values.empty else {}
+    if not label_values.empty:
+        label_lookup_df = label_values.drop_duplicates("normalized_label", keep="first")
+        by_norm_label = label_lookup_df.set_index("normalized_label").to_dict(orient="index")
+    else:
+        by_norm_label = {}
 
     for _, row in source_rows.iterrows():
         field_name = str(row["field_name"]).strip()
         aliases = split_aliases(row.get("possible_column_names", ""))
         notes = "" if pd.isna(row.get("notes", "")) else str(row.get("notes", ""))
-        matched_label, matched_alias, method, confidence = _best_label_match(
-            field_name=field_name,
-            aliases=aliases,
-            labels=labels,
-            fuzzy_threshold=fuzzy_threshold,
-        )
-        value = by_label.get(matched_label) if matched_label is not None else None
-        value = _scale_creditscope_value(field_name, value)
+
+        matched_label = None
+        matched_alias = None
+        method = "not_found"
+        confidence = 0.0
+        value = None
+
+        exact_rows = exact_mapping[exact_mapping["field_name"] == field_name] if not exact_mapping.empty else pd.DataFrame()
+        for _, exact in exact_rows.iterrows():
+            norm_exact = normalize_label(exact["exact_label"])
+            if norm_exact not in by_norm_label:
+                continue
+            row_number = int(by_norm_label[norm_exact]["row"])
+            target_col = int(value_col) + int(exact["value_col_offset"])
+            value = clean_numeric_value(ws.cell(row_number, target_col).value)
+            if value is not None and not (isinstance(value, float) and pd.isna(value)):
+                value = float(value) * float(exact["scale"]) if isinstance(value, (int, float)) else value
+            matched_label = str(by_norm_label[norm_exact]["label"])
+            method = "exact_row_mapping"
+            confidence = 1.0
+            notes = str(exact.get("notes", notes) or notes)
+            break
+
+        if matched_label is None:
+            matched_label, matched_alias, method, confidence = _best_label_match(
+                field_name=field_name,
+                aliases=aliases,
+                labels=labels,
+                fuzzy_threshold=fuzzy_threshold,
+            )
+            matched_row = by_norm_label.get(normalize_label(matched_label)) if matched_label is not None else None
+            value = matched_row.get("value") if matched_row else None
+            value = _scale_creditscope_value(field_name, value)
+
         if matched_label is not None and value is not None and not (isinstance(value, float) and pd.isna(value)):
             issuer_data[field_name] = value
         matches.append(
