@@ -325,10 +325,16 @@ def manual_score_frame(
     )
     rows = audit[(needs_manual_score) & (audit["scoring_required"])].copy()
     if rows.empty:
-        return pd.DataFrame(columns=["formula_id", "section", "factor", "metric", "numeric_score", "score_label"])
+        return pd.DataFrame(
+            columns=["formula_id", "section", "factor", "metric", "numeric_score", "score_label", "score_source", "notes"]
+        )
     rows["numeric_score"] = 2.0
     rows["score_label"] = ""
-    return rows[["formula_id", "section", "factor", "metric", "numeric_score", "score_label"]].reset_index(drop=True)
+    rows["score_source"] = "baseline_placeholder"
+    rows["notes"] = "Replace with analyst/official score before validation."
+    return rows[
+        ["formula_id", "section", "factor", "metric", "numeric_score", "score_label", "score_source", "notes"]
+    ].reset_index(drop=True)
 
 
 def frame_to_issuer_data(frame: pd.DataFrame) -> Dict[str, Any]:

@@ -160,6 +160,10 @@ edited_inputs = st.data_editor(
 )
 
 st.subheader("Manual qualitative scores")
+st.caption(
+    "Default numeric scores are baseline placeholders so the audit can run end-to-end. "
+    "Replace them with analyst or official scorecard values for validation."
+)
 manual_df = manual_score_frame(methodology_id)
 if manual_df.empty:
     st.info("No manual qualitative formulas in this template.")
@@ -178,6 +182,8 @@ else:
             "metric": st.column_config.TextColumn("metric", disabled=True),
             "numeric_score": st.column_config.NumberColumn("numeric_score", min_value=1.0, max_value=21.0, step=0.5),
             "score_label": st.column_config.TextColumn("score_label"),
+            "score_source": st.column_config.TextColumn("score_source", disabled=True),
+            "notes": st.column_config.TextColumn("notes", disabled=True),
         },
     )
 
