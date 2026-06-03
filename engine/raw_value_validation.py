@@ -126,16 +126,43 @@ def _template_formula_ids(methodology_id: str, templates_dir: str | Path) -> lis
     return template["formula_id"].dropna().astype(str).str.strip().tolist()
 
 
+def _secondary_formula_ids_from_thresholds(
+    methodology_id: str,
+    thresholds_path: str | Path = "config/scoring_thresholds.csv",
+) -> list[str]:
+    path = Path(thresholds_path)
+    if not path.exists():
+        return []
+    thresholds = pd.read_csv(path)
+    required = {"methodology_id", "secondary_formula_id"}
+    if not required.issubset(thresholds.columns):
+        return []
+    rows = thresholds[
+        thresholds["methodology_id"].astype(str).str.strip().eq(str(methodology_id).strip())
+    ].copy()
+    if rows.empty:
+        return []
+    ids = rows["secondary_formula_id"].dropna().astype(str).str.strip()
+    return [fid for fid in ids.tolist() if fid]
+
+
 def calculate_template_formulas_from_raw(
     raw_fixture: pd.DataFrame,
     formula_library_path: str | Path = "config/formula_library.csv",
     templates_dir: str | Path = "templates",
+    thresholds_path: str | Path = "config/scoring_thresholds.csv",
 ) -> pd.DataFrame:
     if raw_fixture.empty:
         raise ValueError("Raw input fixture is empty.")
 
     methodology_id = str(raw_fixture["methodology_id"].iloc[0]).strip()
     formula_ids = _template_formula_ids(methodology_id, templates_dir)
+    formula_ids = list(
+        dict.fromkeys(
+            formula_ids
+            + _secondary_formula_ids_from_thresholds(methodology_id, thresholds_path=thresholds_path)
+        )
+    )
     library = load_formula_library(formula_library_path)
     library = library[library["formula_id"].isin(formula_ids)].copy()
     issuer_data = raw_fixture_to_issuer_data(raw_fixture)
@@ -156,6 +183,14 @@ def _required_fields_by_formula(formula_library_path: str | Path = "config/formu
         fields = [part.strip() for part in required.replace(",", ";").replace("|", ";").split(";") if part.strip()]
         out[str(row["formula_id"])] = fields
     return out
+
+
+def _manual_formula_ids_from_library(formula_library_path: str | Path = "config/formula_library.csv") -> Set[str]:
+    library = load_formula_library(formula_library_path)
+    expression = library["expression"].fillna("").astype(str).str.strip().str.lower()
+    required = library["required_data"].fillna("").astype(str).str.strip().str.lower()
+    manual = library[expression.isin({"qualitative", "manual"}) | required.eq("manual")]
+    return set(manual["formula_id"].dropna().astype(str).str.strip())
 
 
 def _source_summary(raw_fixture: pd.DataFrame, fields: Iterable[str], column: str) -> str:
@@ -191,6 +226,7 @@ def _field_source_types(raw_fixture: pd.DataFrame, fields: Iterable[str]) -> lis
 def _source_pending_formula_ids(
     raw_fixture: pd.DataFrame,
     formula_library_path: str | Path = "config/formula_library.csv",
+    thresholds_path: str | Path | None = None,
 ) -> Set[str]:
     required_fields = _required_fields_by_formula(formula_library_path)
     pending: Set[str] = set()
@@ -198,16 +234,33 @@ def _source_pending_formula_ids(
         source_types = set(_field_source_types(raw_fixture, fields))
         if source_types & SOURCE_PENDING_TYPES:
             pending.add(formula_id)
+    if thresholds_path is not None and Path(thresholds_path).exists() and not raw_fixture.empty:
+        methodology_id = str(raw_fixture["methodology_id"].iloc[0]).strip()
+        thresholds = pd.read_csv(thresholds_path)
+        if {"methodology_id", "formula_id", "secondary_formula_id"}.issubset(thresholds.columns):
+            rows = thresholds[
+                thresholds["methodology_id"].astype(str).str.strip().eq(methodology_id)
+            ].copy()
+            for _, row in rows.iterrows():
+                formula_id = str(row.get("formula_id", "") or "").strip()
+                secondary_id = str(row.get("secondary_formula_id", "") or "").strip()
+                if formula_id and secondary_id and secondary_id in pending:
+                    pending.add(formula_id)
     return pending
 
 
-def _manual_scores_from_fixture(formula_results: pd.DataFrame, official_fixture: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
+def _manual_scores_from_fixture(
+    formula_results: pd.DataFrame,
+    official_fixture: pd.DataFrame,
+    formula_library_path: str | Path = "config/formula_library.csv",
+) -> Dict[str, Dict[str, Any]]:
     manual_ids = set(
         formula_results.loc[
             formula_results["status"].astype(str).str.lower().eq("manual"),
             "formula_id",
         ].astype(str)
     )
+    manual_ids.update(_manual_formula_ids_from_library(formula_library_path))
     manual_scores: Dict[str, Dict[str, Any]] = {}
     if official_fixture.empty:
         return manual_scores
@@ -229,8 +282,9 @@ def _official_scores_for_source_pending(
     raw_fixture: pd.DataFrame,
     official_fixture: pd.DataFrame,
     formula_library_path: str | Path = "config/formula_library.csv",
+    thresholds_path: str | Path | None = None,
 ) -> Dict[str, Dict[str, Any]]:
-    pending_ids = _source_pending_formula_ids(raw_fixture, formula_library_path)
+    pending_ids = _source_pending_formula_ids(raw_fixture, formula_library_path, thresholds_path=thresholds_path)
     out: Dict[str, Dict[str, Any]] = {}
     if official_fixture.empty:
         return out
@@ -268,6 +322,7 @@ def compare_raw_formula_values_to_official(
     )
 
     required_fields = _required_fields_by_formula(formula_library_path)
+    manual_formula_ids = _manual_formula_ids_from_library(formula_library_path)
     rows = []
     for _, row in compare.iterrows():
         fid = str(row.get("formula_id", "")).strip()
@@ -279,7 +334,7 @@ def compare_raw_formula_values_to_official(
         model_compare_value = None if model_value is None else model_value * scale
 
         status = str(row.get("status", "") or "").lower()
-        if status == "manual":
+        if status == "manual" or fid in manual_formula_ids:
             value_status = "manual_skip"
             value_match = None
             delta = None
@@ -380,7 +435,15 @@ def compare_auto_scores_to_official(output: Mapping[str, Any], official_fixture:
     compare["model_score"] = pd.to_numeric(compare.get("numeric_score"), errors="coerce")
     compare["official_score_numeric"] = pd.to_numeric(compare.get("official_score"), errors="coerce")
     compare["score_delta"] = compare["model_score"] - compare["official_score_numeric"]
-    compare["score_match"] = compare["score_delta"].abs() <= 0.01
+    compare["score_match"] = (compare["score_delta"].abs() <= 0.01).astype(object)
+    if "official_weight" in compare.columns:
+        weight = pd.to_numeric(compare["official_weight"], errors="coerce").fillna(0.0)
+        rating_only_manual = weight.eq(0.0) & compare["model_score"].isna() & compare["official_score_numeric"].notna()
+        compare.loc[rating_only_manual, "score_match"] = pd.NA
+        compare.loc[rating_only_manual, "status"] = "rating_manual_only"
+        compare.loc[rating_only_manual, "missing_reason"] = (
+            "Manual rating input is used by rating engine but is not a weighted template metric."
+        )
     return compare
 
 
@@ -405,13 +468,19 @@ def raw_value_validation_report(
         raw_df,
         formula_library_path=formula_library_path,
         templates_dir=templates_dir,
+        thresholds_path=thresholds_path,
     )
-    manual_scores = _manual_scores_from_fixture(formula_results, official_fixture)
+    manual_scores = _manual_scores_from_fixture(
+        formula_results,
+        official_fixture,
+        formula_library_path=formula_library_path,
+    )
     manual_scores.update(
         _official_scores_for_source_pending(
             raw_df,
             official_fixture,
             formula_library_path=formula_library_path,
+            thresholds_path=thresholds_path,
         )
     )
     output = run_rating_engine(
