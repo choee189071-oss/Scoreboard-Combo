@@ -46,6 +46,7 @@ population_prior,default,CensusACS|CreditScope|Manual,0.85,true,Prior-period pop
 population_us,default,CensusACS|BEA|Manual,0.85,true,Raw U.S. population denominator.
 poverty_rate,default,CensusACS|CreditScope|OS|Manual,0.80,true,Raw poverty rate.
 revenue,default,CreditScope|ACFR|Manual,0.80,true,Raw total revenue denominator.
+reserve_revenue,default,CreditScope|ACFR|Manual,0.80,true,Raw revenue denominator used for reserve and liquidity metrics.
 service_area_population,default,CensusACS|CreditScope|OS|Manual,0.80,true,Raw service-area population; confirm geography.
 tax_base_population,default,CensusACS|CreditScope|CountyAssessor|Manual,0.85,true,Raw population denominator for tax-base per-capita formulas; do not mix with generic population if geography differs.
 transfers,default,CreditScope|ACFR|Manual,0.80,true,Raw transfers/other financing sources and uses.

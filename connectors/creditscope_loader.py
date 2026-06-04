@@ -12,6 +12,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Iterable, Optional, Union
 
+from openpyxl import load_workbook
+from openpyxl.utils import get_column_letter
 import pandas as pd
 
 from engine.data_sourcing_engine import (
@@ -19,7 +21,7 @@ from engine.data_sourcing_engine import (
     mapping_report_to_source_candidates,
     normalize_source_candidates,
 )
-from engine.mapping_engine import map_creditscope_workbook, map_uploaded_file
+from engine.mapping_engine import clean_numeric_value, map_creditscope_workbook, map_uploaded_file, normalize_label
 
 
 def _uploaded_name(uploaded_file: Any) -> str:
@@ -35,6 +37,191 @@ def _is_excel(uploaded_file: Any) -> bool:
 def _seek_start(uploaded_file: Any) -> None:
     if not isinstance(uploaded_file, (str, Path)) and hasattr(uploaded_file, "seek"):
         uploaded_file.seek(0)
+
+
+def _open_workbook(uploaded_file: Any):
+    _seek_start(uploaded_file)
+    return load_workbook(uploaded_file, read_only=True, data_only=True)
+
+
+def _sheet_by_normalized_name(workbook: Any, sheet_name: str):
+    target = normalize_label(sheet_name)
+    for name in workbook.sheetnames:
+        if normalize_label(name) == target:
+            return workbook[name]
+    return None
+
+
+def _find_label_row(ws: Any, aliases: Iterable[str], label_col: int = 2) -> tuple[int, str] | tuple[None, None]:
+    alias_set = {normalize_label(alias) for alias in aliases}
+    for row_idx in range(1, ws.max_row + 1):
+        label = ws.cell(row_idx, label_col).value
+        if normalize_label(label) in alias_set:
+            return row_idx, str(label).strip()
+    return None, None
+
+
+def _read_period_series(
+    ws: Any,
+    *,
+    aliases: Iterable[str],
+    label_col: int = 2,
+    header_row: int = 7,
+    start_col: int = 3,
+    max_periods: int = 3,
+    absolute: bool = False,
+) -> tuple[list[float], str, str] | tuple[None, None, None]:
+    row_idx, label = _find_label_row(ws, aliases, label_col=label_col)
+    if row_idx is None:
+        return None, None, None
+
+    values: list[float] = []
+    first_col: int | None = None
+    last_col: int | None = None
+    for col_idx in range(start_col, start_col + max_periods):
+        period_header = ws.cell(header_row, col_idx).value
+        if period_header is None:
+            continue
+        value = clean_numeric_value(ws.cell(row_idx, col_idx).value)
+        if value is None or not isinstance(value, (int, float)):
+            continue
+        numeric = abs(float(value)) if absolute else float(value)
+        values.append(numeric)
+        first_col = col_idx if first_col is None else first_col
+        last_col = col_idx
+
+    if not values or first_col is None or last_col is None:
+        return None, None, None
+
+    cell_range = f"{ws.title}!{get_column_letter(first_col)}{row_idx}:{get_column_letter(last_col)}{row_idx}"
+    return values, cell_range, label
+
+
+def _supplemental_match_row(
+    *,
+    sheet_name: str,
+    field_name: str,
+    value: Any,
+    source_cell: str,
+    source_label: str,
+    notes: str,
+) -> dict[str, Any]:
+    return {
+        "sheet_name": sheet_name,
+        "field_name": field_name,
+        "source_name": "CreditScope",
+        "source_type": "Upload",
+        "matched_column": source_cell,
+        "matched_label": source_label,
+        "match_method": "sp_local_government_supplemental_tab",
+        "confidence": 0.99,
+        "value": value,
+        "notes": notes,
+        "status": "ready",
+    }
+
+
+def _load_sp_local_gov_supplemental_report(uploaded_file: Any) -> pd.DataFrame:
+    """
+    Extract raw S&P local government inputs from scorecard support tabs.
+
+    These tabs contain raw multi-year inputs used by S&P's local-government
+    operating-result and reserve metrics. Debt-service and net-direct-debt tabs
+    are intentionally left out here because their workbook totals require
+    source-specific adjustments before they become canonical raw fields.
+    """
+    rows: list[dict[str, Any]] = []
+    workbook = None
+    try:
+        workbook = _open_workbook(uploaded_file)
+
+        financial_ws = _sheet_by_normalized_name(workbook, "Financial Performance")
+        if financial_ws is not None:
+            financial_specs = [
+                (
+                    "governmental_revenue",
+                    ["Governmental Revenues"],
+                    False,
+                    "Three-period governmental revenue series from S&P Financial Performance tab.",
+                ),
+                (
+                    "governmental_expense",
+                    ["Governmental Expenses"],
+                    True,
+                    "Three-period governmental expense series from S&P Financial Performance tab; signs are normalized to positive expenses.",
+                ),
+                (
+                    "transfers",
+                    ["Transfers"],
+                    False,
+                    "Three-period transfer series from S&P Financial Performance tab; signed values are retained.",
+                ),
+            ]
+            for field_name, aliases, absolute, notes in financial_specs:
+                value, source_cell, source_label = _read_period_series(
+                    financial_ws,
+                    aliases=aliases,
+                    absolute=absolute,
+                )
+                if value is None:
+                    continue
+                rows.append(
+                    _supplemental_match_row(
+                        sheet_name=financial_ws.title,
+                        field_name=field_name,
+                        value=value,
+                        source_cell=source_cell,
+                        source_label=source_label,
+                        notes=notes,
+                    )
+                )
+
+        reserves_ws = _sheet_by_normalized_name(workbook, "Reserves and Liquidity")
+        if reserves_ws is not None:
+            reserve_specs = [
+                (
+                    "committed_fund_balance",
+                    ["Committed to"],
+                    "Three-period committed fund balance series from S&P Reserves and Liquidity tab.",
+                ),
+                (
+                    "assigned_fund_balance",
+                    ["Assigned"],
+                    "Three-period assigned fund balance series from S&P Reserves and Liquidity tab.",
+                ),
+                (
+                    "unassigned_fund_balance",
+                    ["Unassigned"],
+                    "Three-period unassigned fund balance series from S&P Reserves and Liquidity tab.",
+                ),
+                (
+                    "reserve_revenue",
+                    ["Governmental Revenues"],
+                    "Three-period reserve denominator revenue series from S&P Reserves and Liquidity tab.",
+                ),
+            ]
+            for field_name, aliases, notes in reserve_specs:
+                value, source_cell, source_label = _read_period_series(reserves_ws, aliases=aliases)
+                if value is None:
+                    continue
+                rows.append(
+                    _supplemental_match_row(
+                        sheet_name=reserves_ws.title,
+                        field_name=field_name,
+                        value=value,
+                        source_cell=source_cell,
+                        source_label=source_label,
+                        notes=notes,
+                    )
+                )
+    except Exception:
+        return pd.DataFrame()
+    finally:
+        if workbook is not None:
+            workbook.close()
+        _seek_start(uploaded_file)
+
+    return pd.DataFrame(rows)
 
 
 def load_creditscope_source_candidates(
@@ -75,6 +262,14 @@ def load_creditscope_source_candidates(
                 mapping_path=mapping_path,
                 fuzzy_threshold=0.82,
             )
+        _seek_start(uploaded_file)
+        supplemental_report = _load_sp_local_gov_supplemental_report(uploaded_file)
+        if not supplemental_report.empty:
+            for _, supplemental_row in supplemental_report.iterrows():
+                value = supplemental_row.get("value")
+                if value is not None:
+                    issuer_data[str(supplemental_row["field_name"])] = value
+            match_report = pd.concat([supplemental_report, match_report], ignore_index=True)
     else:
         _seek_start(uploaded_file)
         issuer_data, match_report = map_uploaded_file(

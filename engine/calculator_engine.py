@@ -329,6 +329,26 @@ def evaluate_avg_expression(expression: str, variables: Dict[str, Any]) -> Tuple
     return float(sum(values) / len(values)), warning
 
 
+def current_period_variables(variables: Dict[str, Any]) -> Tuple[Dict[str, Any], str]:
+    """
+    Convert time-series variables to current-period scalar values.
+
+    Non-average formulas still represent one current-period metric. When the
+    source layer provides a multi-period series for a shared raw field, the
+    first value is treated as the current period and the formula output keeps a
+    warning so the convention stays visible.
+    """
+    sequence_fields = [field for field, value in variables.items() if _is_sequence(value)]
+    if not sequence_fields:
+        return variables, ""
+    current = {
+        field: clean_numeric(_get_at(value, 0)) if _is_sequence(value) else value
+        for field, value in variables.items()
+    }
+    warning = "Current-period formula used the first value from time-series field(s): " + ";".join(sequence_fields)
+    return current, warning
+
+
 def calculate_formula(row: pd.Series | Dict[str, Any], issuer_data: Dict[str, Any]) -> FormulaResult:
     """Calculate a single formula row from formula_library.csv."""
     if not isinstance(row, dict):
@@ -380,8 +400,8 @@ def calculate_formula(row: pd.Series | Dict[str, Any], issuer_data: Dict[str, An
         if re.fullmatch(r"avg_\d+yr\(.*\)", expression.strip()):
             value, warning = evaluate_avg_expression(expression, variables)
         else:
-            value = evaluate_arithmetic_expression(expression, variables)
-            warning = ""
+            scalar_variables, warning = current_period_variables(variables)
+            value = evaluate_arithmetic_expression(expression, scalar_variables)
         return FormulaResult(
             formula_id=formula_id,
             formula_name=formula_name,
