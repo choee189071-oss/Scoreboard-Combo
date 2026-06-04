@@ -59,6 +59,36 @@ if st.session_state.get("api_source_methodology_id") != methodology_id:
     st.session_state["api_source_methodology_id"] = methodology_id
 
 
+SOURCE_SESSION_KEYS = {
+    "issuer_data",
+    "source_report",
+    "source_candidates",
+    "source_readiness_summary",
+    "source_match_reports",
+    "uploaded_sources",
+    "api_source_candidates",
+    "api_source_reports",
+}
+SOURCE_WIDGET_PREFIXES = (
+    "upload_",
+    "sheet_",
+    "manual_source_editor_",
+)
+
+
+def _reset_source_session() -> None:
+    """Clear source-selection state and source-input widgets for a clean rerun."""
+    for key in SOURCE_SESSION_KEYS:
+        st.session_state.pop(key, None)
+    for key in list(st.session_state.keys()):
+        if any(str(key).startswith(prefix) for prefix in SOURCE_WIDGET_PREFIXES):
+            st.session_state.pop(key, None)
+    st.session_state["api_source_candidates"] = {}
+    st.session_state["api_source_reports"] = {}
+    st.session_state["api_source_methodology_id"] = methodology_id
+    st.session_state["source_reset_notice"] = "Source session reset. Upload/select sources again before saving issuer_data."
+
+
 def _default_value_for_field(field_name: str) -> Any:
     defaults = {
         "population": 100000.0,
@@ -234,6 +264,18 @@ except Exception as exc:
 required_field_names = required_fields["field_name"].dropna().astype(str).str.strip().tolist()
 
 
+reset_notice = st.session_state.pop("source_reset_notice", None)
+if reset_notice:
+    st.success(reset_notice)
+
+reset_col, reset_note_col = st.columns([1, 4])
+with reset_col:
+    if st.button("Reset source session"):
+        _reset_source_session()
+        st.rerun()
+with reset_note_col:
+    st.caption("Use reset before switching workbook, worksheet, issuer, or methodology source inputs.")
+
 st.divider()
 st.subheader("Mapped Source Files")
 st.caption("CSV/XLSX uploads are mapped through engine.mapping_engine. PDF parsing is intentionally left for the next parser layer.")
@@ -382,9 +424,17 @@ if api_candidate_frames:
 
 st.divider()
 st.subheader("Manual Canonical Fields")
-st.caption("These fields come from the selected methodology template and formula_library.csv.")
+st.caption(
+    "Manual values are blank by default so stale source data does not re-enter the model. "
+    "Only type values here for truly manual/source-pending fields."
+)
 
-existing = st.session_state.get("issuer_data", {}) or {}
+prefill_manual = st.checkbox(
+    "Pre-fill manual values from current issuer_data",
+    value=False,
+    help="Use only when you intentionally want the currently saved issuer_data to become editable manual input.",
+)
+existing = (st.session_state.get("issuer_data", {}) or {}) if prefill_manual else {}
 rows = []
 for _, row in required_fields.iterrows():
     field_name = str(row["field_name"])
@@ -409,6 +459,7 @@ else:
         use_container_width=True,
         hide_index=True,
         num_rows="fixed",
+        key=f"manual_source_editor_{methodology_id}",
         column_config={
             "value": st.column_config.TextColumn("value"),
             "used_by": st.column_config.TextColumn("used_by", disabled=True),
