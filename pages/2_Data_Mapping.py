@@ -135,6 +135,28 @@ def _default_value_for_field(field_name: str) -> Any:
     return defaults.get(field_name, None)
 
 
+def _display_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize mixed object columns for Streamlit/Arrow display only."""
+    if not isinstance(df, pd.DataFrame) or df.empty:
+        return df
+
+    def _display_value(value: Any) -> str:
+        if value is None:
+            return ""
+        try:
+            if pd.isna(value):
+                return ""
+        except Exception:
+            pass
+        return str(value)
+
+    display = df.copy()
+    for col in display.columns:
+        if display[col].dtype == "object":
+            display[col] = display[col].map(_display_value)
+    return display
+
+
 def _required_fields_for_methodology(methodology_id: str) -> pd.DataFrame:
     formulas = load_formula_library("config/formula_library.csv")
     template = load_factor_template(methodology_id, templates_dir="templates")
@@ -465,7 +487,7 @@ for i, (key, (source_name, label)) in enumerate(source_options.items()):
 
 if match_reports:
     with st.expander("Source mapping reports", expanded=True):
-        st.dataframe(pd.concat(match_reports, ignore_index=True), width="stretch", hide_index=True)
+        st.dataframe(_display_df(pd.concat(match_reports, ignore_index=True)), width="stretch", hide_index=True)
 
 st.divider()
 st.subheader("API Candidates")
@@ -544,7 +566,7 @@ api_candidate_frames = [
     if isinstance(frame, pd.DataFrame) and not frame.empty
 ]
 if api_candidate_frames:
-    st.dataframe(pd.concat(api_candidate_frames, ignore_index=True), width="stretch", hide_index=True)
+    st.dataframe(_display_df(pd.concat(api_candidate_frames, ignore_index=True)), width="stretch", hide_index=True)
 
 st.divider()
 st.subheader("Manual / Source-Pending Fields")
@@ -612,7 +634,7 @@ with st.expander("Source Readiness Detail", expanded=True):
     readiness = st.session_state.get("source_readiness_summary", pd.DataFrame())
     source_report = st.session_state.get("source_report", pd.DataFrame())
     if isinstance(readiness, pd.DataFrame) and not readiness.empty:
-        st.dataframe(readiness, width="stretch", hide_index=True)
+        st.dataframe(_display_df(readiness), width="stretch", hide_index=True)
     else:
         st.info("No source selection has been saved yet.")
     if isinstance(source_report, pd.DataFrame) and not source_report.empty:
@@ -620,17 +642,17 @@ with st.expander("Source Readiness Detail", expanded=True):
         tab1, tab2, tab3, tab4 = st.tabs(["Missing", "Ready", "Review", "All Selected"])
         with tab1:
             missing = selected_report[selected_report["readiness_status"].astype(str).eq("missing")]
-            st.dataframe(missing, width="stretch", hide_index=True) if not missing.empty else st.info("No selected fields are missing.")
+            st.dataframe(_display_df(missing), width="stretch", hide_index=True) if not missing.empty else st.info("No selected fields are missing.")
         with tab2:
             ready = selected_report[selected_report["readiness_status"].astype(str).eq("independent_ready")]
-            st.dataframe(ready, width="stretch", hide_index=True) if not ready.empty else st.info("No independently ready fields yet.")
+            st.dataframe(_display_df(ready), width="stretch", hide_index=True) if not ready.empty else st.info("No independently ready fields yet.")
         with tab3:
             review = selected_report[
                 ~selected_report["readiness_status"].astype(str).isin(["missing", "independent_ready"])
             ]
-            st.dataframe(review, width="stretch", hide_index=True) if not review.empty else st.info("No source-pending or review fields.")
+            st.dataframe(_display_df(review), width="stretch", hide_index=True) if not review.empty else st.info("No source-pending or review fields.")
         with tab4:
-            st.dataframe(selected_report, width="stretch", hide_index=True)
+            st.dataframe(_display_df(selected_report), width="stretch", hide_index=True)
 
 with st.expander("Current issuer_data", expanded=False):
     data = st.session_state.get("issuer_data", {}) or {}
