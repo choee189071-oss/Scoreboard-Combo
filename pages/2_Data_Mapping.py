@@ -73,6 +73,7 @@ SOURCE_WIDGET_PREFIXES = (
     "upload_",
     "sheet_",
     "allow_mismatched_sheet_",
+    "worksheet_override_",
     "manual_source_editor_",
 )
 
@@ -241,6 +242,22 @@ def _sheet_match_score(sheet_name: str, uploaded_name: str) -> int:
     return len(upload_tokens & sheet_tokens)
 
 
+def _sheet_raw_hint_score(sheet_name: str) -> int:
+    lowered = str(sheet_name).lower()
+    score = 0
+    if any(token in lowered for token in ["fin", "raw", "creditscope", "credit scope", "financial"]):
+        score += 2
+    if any(token in lowered for token in ["scorecard", "public", "summary", "validation"]):
+        score -= 3
+    if "backup" in lowered:
+        score -= 1
+    return score
+
+
+def _is_likely_raw_sheet(sheet_name: str, uploaded_name: str) -> bool:
+    return _sheet_match_score(sheet_name, uploaded_name) > 0 and _sheet_raw_hint_score(sheet_name) >= 0
+
+
 def _is_sheet_mismatch(sheet_name: str | None, uploaded_name: str) -> bool:
     """Return True when a named workbook sheet clearly does not match the uploaded file."""
     if not sheet_name:
@@ -251,17 +268,20 @@ def _is_sheet_mismatch(sheet_name: str | None, uploaded_name: str) -> bool:
     return _sheet_match_score(sheet_name, uploaded_name) == 0
 
 
-def _preferred_sheet_index(sheet_names: List[str], uploaded_name: str) -> int:
+def _preferred_sheet_index(sheet_names: List[str], uploaded_name: str) -> int | None:
     if not sheet_names:
-        return 0
+        return None
     scored = [
         (
             _sheet_match_score(sheet, uploaded_name),
-            0 if "backup" not in sheet.lower() else -1,
+            _sheet_raw_hint_score(sheet),
             -idx,
         )
         for idx, sheet in enumerate(sheet_names)
+        if _is_likely_raw_sheet(sheet, uploaded_name)
     ]
+    if not scored:
+        return None
     best_idx = -max(scored)[2]
     return max(0, min(best_idx, len(sheet_names) - 1))
 
@@ -311,22 +331,59 @@ for i, (key, (source_name, label)) in enumerate(source_options.items()):
             sheet_names = _excel_sheet_names(uploaded)
             if sheet_names:
                 default_sheet_idx = _preferred_sheet_index(sheet_names, uploaded.name)
-                selected_sheet_name = st.selectbox(
-                    "CreditScope worksheet",
-                    options=sheet_names,
-                    index=default_sheet_idx,
-                    key=f"sheet_{key}_{uploaded.name}",
-                )
-                if _is_sheet_mismatch(selected_sheet_name, uploaded.name):
-                    st.error("Selected worksheet name does not match the uploaded file name. Pick the matching issuer sheet before saving.")
-                    allow_mismatch = st.checkbox(
-                        "Allow mismatched worksheet anyway",
-                        value=False,
-                        key=f"allow_mismatched_sheet_{key}_{uploaded.name}",
-                        help="Use only for workbooks whose sheet names are generic and cannot match the issuer file name.",
+                if default_sheet_idx is not None:
+                    selected_sheet_name = sheet_names[default_sheet_idx]
+                    st.success(f"Auto-selected CreditScope worksheet: {selected_sheet_name}")
+                    with st.expander("Advanced worksheet override", expanded=False):
+                        use_override = st.checkbox(
+                            "Use a different worksheet",
+                            value=False,
+                            key=f"worksheet_override_{key}_{uploaded.name}",
+                        )
+                        if use_override:
+                            override_sheet_name = st.selectbox(
+                                "CreditScope worksheet",
+                                options=sheet_names,
+                                index=default_sheet_idx,
+                                key=f"sheet_{key}_{uploaded.name}",
+                            )
+                            if _is_sheet_mismatch(override_sheet_name, uploaded.name):
+                                st.warning(
+                                    "Selected worksheet name does not match the uploaded file name. "
+                                    "Only use this for generic workbook sheet names."
+                                )
+                                allow_mismatch = st.checkbox(
+                                    "Allow mismatched worksheet anyway",
+                                    value=False,
+                                    key=f"allow_mismatched_sheet_{key}_{uploaded.name}",
+                                    help="Use only for workbooks whose sheet names are generic and cannot match the issuer file name.",
+                                )
+                                if not allow_mismatch:
+                                    continue
+                            selected_sheet_name = override_sheet_name
+                else:
+                    st.error(
+                        "No matching CreditScope raw worksheet found. Upload a workbook with a matching raw/FIN sheet, "
+                        "or use this workbook only for official scorecard validation."
                     )
-                    if not allow_mismatch:
-                        continue
+                    st.caption(f"Detected worksheets: {', '.join(sheet_names)}")
+                    with st.expander("Advanced worksheet override", expanded=False):
+                        allow_mismatch = st.checkbox(
+                            "Map a non-matching worksheet anyway",
+                            value=False,
+                            key=f"allow_mismatched_sheet_{key}_{uploaded.name}",
+                            help="Use only when the workbook sheet name is generic but the sheet is truly the issuer raw data.",
+                        )
+                        if allow_mismatch:
+                            selected_sheet_name = st.selectbox(
+                                "CreditScope worksheet",
+                                options=sheet_names,
+                                index=0,
+                                key=f"sheet_{key}_{uploaded.name}",
+                            )
+                            st.warning(f"Override selected: {selected_sheet_name}")
+                        else:
+                            continue
         try:
             if source_name == "CreditScope":
                 loader_output = load_creditscope_source_candidates(
