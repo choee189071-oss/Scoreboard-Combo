@@ -157,6 +157,39 @@ def _display_df(df: pd.DataFrame) -> pd.DataFrame:
     return display
 
 
+def _mapping_report_display(df: pd.DataFrame) -> pd.DataFrame:
+    """Make upload match diagnostics readable for end users."""
+    if not isinstance(df, pd.DataFrame) or df.empty:
+        return df
+
+    display = df.copy()
+    match_method = display.get("match_method", pd.Series("", index=display.index)).fillna("").astype(str)
+    matched_column = display.get("matched_column", pd.Series("", index=display.index))
+    confidence = pd.to_numeric(display.get("confidence", pd.Series(0.0, index=display.index)), errors="coerce").fillna(0.0)
+
+    found = ~match_method.eq("not_found") & matched_column.notna() & matched_column.astype(str).str.strip().ne("")
+    display.insert(
+        0,
+        "mapping_status",
+        [
+            "mapped" if is_found and conf >= 0.78 else "review" if is_found else "not_found_in_this_file"
+            for is_found, conf in zip(found.tolist(), confidence.tolist())
+        ],
+    )
+
+    for col in ["source_type", "matched_column", "matched_label", "value", "notes"]:
+        if col in display.columns:
+            display[col] = display[col].where(display[col].notna(), "")
+    if "source_type" in display.columns:
+        display["source_type"] = display["source_type"].replace("", "upload")
+    if "notes" in display.columns:
+        display.loc[~found, "notes"] = display.loc[~found, "notes"].replace(
+            "",
+            "Not found in this upload. This is expected for fields supplied by Census, BEA, OS, ACFR, or manual input.",
+        )
+    return display
+
+
 def _required_fields_for_methodology(methodology_id: str) -> pd.DataFrame:
     formulas = load_formula_library("config/formula_library.csv")
     template = load_factor_template(methodology_id, templates_dir="templates")
@@ -487,7 +520,30 @@ for i, (key, (source_name, label)) in enumerate(source_options.items()):
 
 if match_reports:
     with st.expander("Source mapping reports", expanded=True):
-        st.dataframe(_display_df(pd.concat(match_reports, ignore_index=True)), width="stretch", hide_index=True)
+        combined_report = pd.concat(match_reports, ignore_index=True)
+        report_display = _mapping_report_display(combined_report)
+        status_counts = report_display["mapping_status"].value_counts().to_dict() if "mapping_status" in report_display else {}
+        report_cols = st.columns(3)
+        report_cols[0].metric("Mapped From Upload", int(status_counts.get("mapped", 0)))
+        report_cols[1].metric("Needs Review", int(status_counts.get("review", 0)))
+        report_cols[2].metric("Not In This File", int(status_counts.get("not_found_in_this_file", 0)))
+        st.caption(
+            "This is an upload diagnostic, not the final missing-field list. "
+            "Rows marked Not In This File may still be filled by Census, BEA, OS, ACFR, or the manual fallback editor."
+        )
+        mapped_rows = report_display[report_display["mapping_status"].isin(["mapped", "review"])]
+        not_found_rows = report_display[report_display["mapping_status"].eq("not_found_in_this_file")]
+        mapped_tab, not_found_tab, all_tab = st.tabs(["Mapped / Review", "Not In This File", "All Diagnostics"])
+        with mapped_tab:
+            st.dataframe(_display_df(mapped_rows), width="stretch", hide_index=True) if not mapped_rows.empty else st.info(
+                "No fields were mapped from the uploaded file."
+            )
+        with not_found_tab:
+            st.dataframe(_display_df(not_found_rows), width="stretch", hide_index=True) if not not_found_rows.empty else st.info(
+                "No upload fields were missing from this file."
+            )
+        with all_tab:
+            st.dataframe(_display_df(report_display), width="stretch", hide_index=True)
 
 st.divider()
 st.subheader("API Candidates")
@@ -569,10 +625,10 @@ if api_candidate_frames:
     st.dataframe(_display_df(pd.concat(api_candidate_frames, ignore_index=True)), width="stretch", hide_index=True)
 
 st.divider()
-st.subheader("Manual / Source-Pending Fields")
+st.subheader("Manual Fallback Editor")
 st.caption(
-    "Manual values are blank by default so stale source data does not re-enter the model. "
-    "Only type values here for truly manual/source-pending fields."
+    "This is optional. It lists formula raw fields so you can type values only when no upload/API source supplies them. "
+    "Blank rows are ignored and do not become calculator inputs."
 )
 
 prefill_manual = st.checkbox(
@@ -600,6 +656,10 @@ if manual_df.empty:
     st.info("No formula-driven raw fields found for the selected methodology.")
     edited = manual_df
 else:
+    st.info(
+        "For the true missing list, save issuer_data first and review Source Readiness Detail below. "
+        "The calculator only reports fields missing from the selected final issuer_data, not every blank row in this editor."
+    )
     edited = st.data_editor(
         manual_df,
         width="stretch",
