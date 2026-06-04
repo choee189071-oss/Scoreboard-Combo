@@ -11,6 +11,7 @@ population,CreditScope,"Population|Resident Population|County Population|Distric
 tax_base_population,CensusACS,"Tax Base Population|Taxbase Population|District Population|County Population|Total Population",fuzzy,Raw population denominator for full value per capita; prefer Census/API geography over derived ratios
 operating_revenue,CreditScope,"Operating Revenue|Operating Revenues|Total Operating Revenue|Operating Income",fuzzy,Raw operating revenue only
 operating_expense,CreditScope,"Operating Expense|Operating Expenses|Total Operating Expense|Operating Expenditures",fuzzy,Raw operating expense only
+adjusted_operating_revenue,CreditScope,"Adjusted Total Operating Rev|Adjusted Operating Revenue|Adjusted Operating Revenues|Adjusted Total Operating Revenue",fuzzy,Raw adjusted operating revenue only
 governmental_revenue,CreditScope,"Governmental Revenue|Governmental Revenues|Total Governmental Revenue|Total Governmental Revenues",fuzzy,Raw governmental revenue
 governmental_expense,CreditScope,"Governmental Expense|Governmental Expenses|Governmental Expenditures|Total Governmental Expenditures",fuzzy,Raw governmental expense
 transfers,CreditScope,"Transfers|Net Transfers|Transfers In Out|Other Financing Sources Uses",fuzzy,Raw transfer amount

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List
 
 import pandas as pd
 import streamlit as st
+from openpyxl import load_workbook
 from utils.ui_helpers import page_header, current_context_card, init_state
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -147,6 +149,82 @@ def _clean_edited_values(df: pd.DataFrame) -> Dict[str, Any]:
     return data
 
 
+def _is_excel_upload(uploaded_file: Any) -> bool:
+    name = str(getattr(uploaded_file, "name", "") or uploaded_file)
+    return Path(name).suffix.lower() in {".xlsx", ".xls"}
+
+
+def _excel_sheet_names(uploaded_file: Any) -> List[str]:
+    if not _is_excel_upload(uploaded_file):
+        return []
+    workbook = None
+    try:
+        if hasattr(uploaded_file, "seek"):
+            uploaded_file.seek(0)
+        workbook = load_workbook(uploaded_file, read_only=True, data_only=True)
+        return list(workbook.sheetnames)
+    except Exception:
+        return []
+    finally:
+        if workbook is not None:
+            workbook.close()
+        if hasattr(uploaded_file, "seek"):
+            uploaded_file.seek(0)
+
+
+def _name_tokens(value: str) -> set[str]:
+    ignored = {
+        "scorecard",
+        "moodys",
+        "moody",
+        "higher",
+        "local",
+        "gov",
+        "water",
+        "sewer",
+        "utility",
+        "xlsx",
+        "xls",
+        "2023",
+        "2024",
+        "2025",
+        "2026",
+        "fin",
+        "ccd",
+        "go",
+        "sp",
+        "k12",
+    }
+    return {
+        token
+        for token in re.findall(r"[a-z0-9]+", str(value).lower())
+        if len(token) > 2 and token not in ignored
+    }
+
+
+def _sheet_match_score(sheet_name: str, uploaded_name: str) -> int:
+    upload_tokens = _name_tokens(uploaded_name)
+    if not upload_tokens:
+        return 0
+    sheet_tokens = _name_tokens(sheet_name)
+    return len(upload_tokens & sheet_tokens)
+
+
+def _preferred_sheet_index(sheet_names: List[str], uploaded_name: str) -> int:
+    if not sheet_names:
+        return 0
+    scored = [
+        (
+            _sheet_match_score(sheet, uploaded_name),
+            0 if "backup" not in sheet.lower() else -1,
+            -idx,
+        )
+        for idx, sheet in enumerate(sheet_names)
+    ]
+    best_idx = -max(scored)[2]
+    return max(0, min(best_idx, len(sheet_names) - 1))
+
+
 try:
     required_fields = _required_fields_for_methodology(methodology_id)
 except Exception as exc:
@@ -175,12 +253,26 @@ for i, (key, (source_name, label)) in enumerate(source_options.items()):
         uploaded = st.file_uploader(label, type=["csv", "xlsx", "xls"], key=f"upload_{key}")
         if uploaded is None:
             continue
+        selected_sheet_name = None
+        if source_name == "CreditScope" and _is_excel_upload(uploaded):
+            sheet_names = _excel_sheet_names(uploaded)
+            if sheet_names:
+                default_sheet_idx = _preferred_sheet_index(sheet_names, uploaded.name)
+                selected_sheet_name = st.selectbox(
+                    "CreditScope worksheet",
+                    options=sheet_names,
+                    index=default_sheet_idx,
+                    key=f"sheet_{key}_{uploaded.name}",
+                )
+                if selected_sheet_name and _sheet_match_score(selected_sheet_name, uploaded.name) == 0:
+                    st.warning("Selected worksheet name does not appear to match the uploaded file name.")
         try:
             if source_name == "CreditScope":
                 loader_output = load_creditscope_source_candidates(
                     uploaded_file=uploaded,
                     mapping_path="config/field_mapping.csv",
                     row_mapping_path="config/creditscope_row_mapping.csv",
+                    sheet_name=selected_sheet_name,
                     value_col=2,
                     required_fields=required_field_names,
                 )

@@ -7,6 +7,7 @@ operating_revenue,Operating Revenue,0,1000,Raw operating revenue in $000s.
 operating_expense,Operating Expenses,0,1000,Raw operating expenses in $000s.
 governmental_revenue,Revenue,0,1000,CreditScope summary raw revenue in $000s.
 governmental_expense,Total Expenses,0,1000,CreditScope summary raw expense in $000s.
+adjusted_operating_revenue,Adjusted Total Operating Rev,0,1000,Raw adjusted operating revenue in $000s.
 fund_balance,Fund Balance,0,1000,Raw fund balance in $000s when detailed components are unavailable.
 cash,Total Cash,0,1000,Raw total cash in $000s.
 cash_and_investments,Total Cash,0,1000,Use raw total cash as cash/investments proxy only when no raw cash-and-investments row is populated.
