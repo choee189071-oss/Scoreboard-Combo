@@ -24,7 +24,7 @@ try:
         run_methodology_test,
     )
 except Exception as exc:  # pragma: no cover - Streamlit display path
-    st.set_page_config(page_title="Methodology Audit", page_icon="⑦", layout="wide")
+    st.set_page_config(page_title="Methodology Audit", layout="wide")
     st.error("Could not import methodology audit tools.")
     st.exception(exc)
     st.stop()
@@ -40,7 +40,7 @@ def _clean_display_df(df: pd.DataFrame) -> pd.DataFrame:
 
 def _show_df_or_info(df: pd.DataFrame, empty_message: str) -> None:
     if isinstance(df, pd.DataFrame) and not df.empty:
-        st.dataframe(_clean_display_df(df), use_container_width=True, hide_index=True)
+        st.dataframe(_clean_display_df(df), width="stretch", hide_index=True)
     else:
         st.info(empty_message)
 
@@ -85,10 +85,10 @@ def _rating_summary_for_methodology(rating_output: dict) -> pd.DataFrame:
     return _clean_display_df(pd.DataFrame([row]))
 
 
-st.set_page_config(page_title="Methodology Audit", page_icon="⑦", layout="wide")
+st.set_page_config(page_title="Methodology Audit", layout="wide")
 init_state()
 page_header(
-    "⑦ Methodology Audit",
+    "Methodology Audit",
     "Verify formulas, thresholds, scoring, and rating aggregation before source loaders are complete.",
     "methodology_audit",
 )
@@ -96,7 +96,7 @@ current_context_card()
 
 st.subheader("Five-methodology structural audit")
 summary_df = audit_all_methodologies(AUDIT_METHODOLOGIES)
-st.dataframe(summary_df, use_container_width=True, hide_index=True)
+st.dataframe(summary_df, width="stretch", hide_index=True)
 
 methodology_id = st.selectbox(
     "Methodology",
@@ -137,7 +137,7 @@ with st.expander("Formula / threshold / source audit", expanded=True):
         "metric",
         "expression",
     ]
-    st.dataframe(audit_df[[c for c in show_cols if c in audit_df.columns]], use_container_width=True, hide_index=True)
+    st.dataframe(audit_df[[c for c in show_cols if c in audit_df.columns]], width="stretch", hide_index=True)
 
 st.subheader("Editable test inputs")
 st.caption("These are baseline raw inputs for formula testing. Replace them with official/workbook values as you validate each methodology.")
@@ -147,7 +147,7 @@ default_input_df = issuer_data_editor_frame(methodology_id, existing_data=existi
 
 edited_inputs = st.data_editor(
     default_input_df,
-    use_container_width=True,
+    width="stretch",
     hide_index=True,
     num_rows="fixed",
     key=f"audit_inputs_{methodology_id}",
@@ -171,7 +171,7 @@ if manual_df.empty:
 else:
     edited_manual = st.data_editor(
         manual_df,
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         num_rows="fixed",
         key=f"audit_manual_{methodology_id}",
@@ -230,7 +230,7 @@ if isinstance(result, dict) and result.get("methodology_id") == methodology_id:
     tabs = st.tabs(["Rating", "Formula Results", "Metric Scores", "Factor Scores", "Section Scores", "Auto Scores"])
 
     with tabs[0]:
-        st.dataframe(_rating_summary_for_methodology(rating_output), use_container_width=True, hide_index=True)
+        st.dataframe(_rating_summary_for_methodology(rating_output), width="stretch", hide_index=True)
         warnings = rr.get("warnings", []) or []
         if warnings:
             for warning in warnings:
@@ -240,7 +240,7 @@ if isinstance(result, dict) and result.get("methodology_id") == methodology_id:
         df = result.get("method_formula_results", pd.DataFrame())
         display_cols = ["formula_id", "formula_name", "category", "status", "value", "missing_fields", "warning", "error"]
         if isinstance(df, pd.DataFrame) and not df.empty:
-            st.dataframe(df[[c for c in display_cols if c in df.columns]], use_container_width=True, hide_index=True)
+            st.dataframe(df[[c for c in display_cols if c in df.columns]], width="stretch", hide_index=True)
         else:
             st.info("No formula results.")
 
@@ -259,7 +259,7 @@ if isinstance(result, dict) and result.get("methodology_id") == methodology_id:
         if auto_scores:
             auto_df = pd.DataFrame.from_dict(auto_scores, orient="index")
             auto_df.insert(0, "formula_id", auto_df.index)
-            st.dataframe(_clean_display_df(auto_df.reset_index(drop=True)), use_container_width=True, hide_index=True)
+            st.dataframe(_clean_display_df(auto_df.reset_index(drop=True)), width="stretch", hide_index=True)
         else:
             st.info("No automatic threshold scores were produced.")
 

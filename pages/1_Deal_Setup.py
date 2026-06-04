@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 import streamlit as st
-from utils.ui_helpers import page_header, SCHEME_OPTIONS, init_state
+from utils.ui_helpers import SCHEME_OPTIONS, action_panel, current_context_card, init_state, page_header
 
-st.set_page_config(page_title="Deal Setup", page_icon="①", layout="wide")
+st.set_page_config(page_title="Deal Setup", layout="wide")
 init_state()
-page_header("① Deal Setup", "Choose the methodology, issuer, and analysis year. This becomes the shared context for the rest of the app.", "deal_setup")
+page_header(
+    "Deal Setup",
+    "Choose the methodology, issuer, and analysis year that every downstream page should use.",
+    "deal_setup",
+)
+current_context_card()
 
 left, right = st.columns([1.2, 1])
 with left:
-    st.subheader("Deal context")
+    st.subheader("Deal Context")
     method_ids = list(SCHEME_OPTIONS.keys())
     current_method = st.session_state.get("methodology_id", method_ids[0])
     methodology_id = st.selectbox(
@@ -33,17 +38,17 @@ with left:
         st.session_state["analysis_year"] = analysis_year.strip()
         st.session_state["analysis_years_included"] = years
         st.success("Deal setup saved. Go to Data Mapping next.")
+        action_panel(
+            "Next step: Data Mapping",
+            "Upload the raw workbook or fetch API candidates for this issuer before running formulas.",
+            "good",
+        )
 
 with right:
-    st.subheader("Workflow rule")
-    st.markdown(
-        """
-        The app should always move in this order:
-
-        **Deal Setup → Data Mapping → Calculators → Scoreboard → Validation → Export**
-
-        You can still jump around, but downstream pages will show missing inputs clearly.
-        """
+    st.subheader("Workflow Guardrails")
+    action_panel(
+        "Keep one issuer context per run",
+        "If you switch issuer, methodology, or source file, reset the source session in Data Mapping before saving new issuer_data.",
+        "warn",
     )
-    st.warning("Do not polish UI heavily yet. First goal: make the full model path visible.")
-
+    st.write("Recommended order: Deal Setup, Data Mapping, Calculators, Scoreboard, Validation, Export.")

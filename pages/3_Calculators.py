@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
-from utils.ui_helpers import page_header, current_context_card, init_state
+from utils.ui_helpers import current_context_card, formula_action, init_state, page_header, readiness_action
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -15,17 +15,17 @@ try:
     from engine.calculator_engine import calculate_all_formulas, summarize_calculation_results
     from engine.factor_engine import load_factor_template
 except Exception as exc:  # pragma: no cover - Streamlit display path
-    st.set_page_config(page_title="Calculators", page_icon="③", layout="wide")
+    st.set_page_config(page_title="Calculators", layout="wide")
     st.error("Could not import calculator/factor engines.")
     st.exception(exc)
     st.stop()
 
 
-st.set_page_config(page_title="Calculators", page_icon="③", layout="wide")
+st.set_page_config(page_title="Calculators", layout="wide")
 init_state()
 page_header(
-    "③ Calculators",
-    "Run formula_library.csv against canonical issuer_data and prepare formula_results for Scoreboard.",
+    "Calculators",
+    "Run formula_library.csv against canonical issuer_data and save formula_results for Scoreboard.",
     "calculators",
 )
 current_context_card()
@@ -63,9 +63,15 @@ cols[0].metric("Ready", summary.get("ready", 0))
 cols[1].metric("Missing", summary.get("missing", 0))
 cols[2].metric("Manual", summary.get("manual", 0))
 cols[3].metric("Error", summary.get("error", 0))
+formula_action(summary)
+
+source_report = st.session_state.get("source_report")
+if source_report is not None:
+    with st.expander("Source coverage feeding these formulas", expanded=False):
+        readiness_action(source_report)
 
 st.subheader("Methodology Formula Results")
-st.caption("This table is filtered to the formula_id values used by the selected template.")
+st.caption("Filtered to formula_id values used by the selected template and related threshold logic.")
 display_cols = [
     "formula_id",
     "formula_name",
@@ -77,15 +83,18 @@ display_cols = [
     "error",
 ]
 available_cols = [c for c in display_cols if c in method_formula_df.columns]
-st.dataframe(method_formula_df[available_cols], use_container_width=True, hide_index=True)
-
 missing_df = method_formula_df[method_formula_df["status"] != "ready"].copy()
-if not missing_df.empty:
-    with st.expander("Missing / manual / error details", expanded=True):
-        st.dataframe(missing_df[available_cols], use_container_width=True, hide_index=True)
+ready_df = method_formula_df[method_formula_df["status"] == "ready"].copy()
+tab1, tab2, tab3 = st.tabs(["Ready", "Missing / Manual / Error", "All Methodology Formulas"])
+with tab1:
+    st.dataframe(ready_df[available_cols], width="stretch", hide_index=True) if not ready_df.empty else st.info("No ready formulas yet.")
+with tab2:
+    st.dataframe(missing_df[available_cols], width="stretch", hide_index=True) if not missing_df.empty else st.info("No missing, manual, or error formulas.")
+with tab3:
+    st.dataframe(method_formula_df[available_cols], width="stretch", hide_index=True)
 
 with st.expander("All formula_library results", expanded=False):
-    st.dataframe(all_formula_df, use_container_width=True, hide_index=True)
+    st.dataframe(all_formula_df, width="stretch", hide_index=True)
 
 if st.button("Save formula results", type="primary"):
     st.session_state["formula_results"] = all_formula_df

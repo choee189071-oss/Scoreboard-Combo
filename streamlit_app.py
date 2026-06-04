@@ -1,30 +1,112 @@
 from __future__ import annotations
 
+import pandas as pd
 import streamlit as st
-from utils.ui_helpers import init_state, inject_css, render_workflow, SCHEME_OPTIONS
 
-st.set_page_config(page_title="CreditScope MVP", page_icon="🏛️", layout="wide")
-init_state()
-inject_css()
-
-st.title("🏛️ CreditScope Scoreboard MVP")
-st.caption("A clean workflow for testing raw data → mapping → formulas → factor scores → indicative rating.")
-render_workflow(active="deal_setup")
-
-c1, c2, c3 = st.columns(3)
-c1.metric("Current issuer", st.session_state.get("issuer_name") or "Not set")
-c2.metric("Methodology", SCHEME_OPTIONS.get(st.session_state.get("methodology_id"), "Not set"))
-c3.metric("Analysis year", st.session_state.get("analysis_year") or "Not set")
-
-st.markdown("### What to do next")
-st.markdown(
-    """
-    1. Open **Deal Setup** and set methodology / issuer / year.  
-    2. Open **Data Mapping** and upload source files or enter key raw fields.  
-    3. Open **Calculators** to produce formula results.  
-    4. Open **Scoreboard** to generate factor scores and rating.  
-    5. Use **Validation** to compare against the official scorecard.
-    """
+from utils.ui_helpers import (
+    SCHEME_OPTIONS,
+    action_panel,
+    current_context_card,
+    init_state,
+    page_header,
+    source_readiness_counts,
+    status_counts,
 )
 
-st.info("This UI is intentionally simple: the goal is to visualize the full workflow before polishing the product.")
+st.set_page_config(page_title="Scoreboard Combo", layout="wide")
+init_state()
+
+page_header(
+    "Workflow Console",
+    "A focused workspace for sourcing raw issuer data, calculating methodology formulas, and producing an indicative rating.",
+    "deal_setup",
+)
+current_context_card()
+
+source_report = st.session_state.get("source_report")
+formula_results = st.session_state.get("methodology_formula_results")
+if not isinstance(formula_results, pd.DataFrame) or formula_results.empty:
+    formula_results = st.session_state.get("formula_results")
+rating_output = st.session_state.get("rating_output")
+
+source_counts = source_readiness_counts(source_report)
+formula_counts = status_counts(formula_results, "status")
+rating_result = rating_output.get("rating_result", {}) if isinstance(rating_output, dict) else {}
+
+st.subheader("Run Status")
+status_cols = st.columns(4)
+status_cols[0].metric("Source Ready", source_counts.get("independent_ready", 0))
+status_cols[1].metric(
+    "Source Gaps",
+    source_counts.get("missing", 0) + source_counts.get("source_pending", 0) + source_counts.get("needs_review", 0),
+)
+status_cols[2].metric("Formula Ready", formula_counts.get("ready", 0))
+status_cols[3].metric("Rating", rating_result.get("indicative_rating") or "Not run")
+
+if not source_counts:
+    action_panel(
+        "Next step: set up data sources",
+        "Open Deal Setup to confirm the issuer and methodology, then use Data Mapping to upload CreditScope or fetch API candidates.",
+        "warn",
+    )
+elif source_counts.get("missing", 0):
+    action_panel(
+        "Next step: close source gaps",
+        "Data Mapping has saved issuer_data, but required raw fields are still missing. Review the missing list before trusting downstream scores.",
+        "bad",
+    )
+elif not formula_counts:
+    action_panel(
+        "Next step: run Calculators",
+        "The source layer has data. Run the methodology formulas and save formula_results for the Scoreboard.",
+        "good",
+    )
+elif formula_counts.get("missing", 0) or formula_counts.get("error", 0):
+    action_panel(
+        "Next step: fix formula inputs",
+        "Some formulas still need raw fields or returned errors. Use Calculators to identify the exact missing fields.",
+        "warn",
+    )
+elif not rating_result:
+    action_panel(
+        "Next step: run Scoreboard",
+        "Formula results are available. Enter any true qualitative scores and run the rating engine.",
+        "good",
+    )
+else:
+    action_panel(
+        "Workflow run is available",
+        "Use Scoreboard for factor detail, Validation for fixture comparison, or Export for deliverables.",
+        "good",
+    )
+
+st.subheader("Current Deal")
+deal_cols = st.columns(3)
+deal_cols[0].metric("Issuer", st.session_state.get("issuer_name") or "Not set")
+deal_cols[1].metric("Methodology", SCHEME_OPTIONS.get(st.session_state.get("methodology_id"), "Not set"))
+deal_cols[2].metric("Analysis Year", st.session_state.get("analysis_year") or "Not set")
+
+with st.expander("Session details", expanded=False):
+    c1, c2 = st.columns(2)
+    with c1:
+        st.write("Source readiness")
+        if source_counts:
+            st.dataframe(
+                pd.DataFrame(
+                    [{"readiness_status": key, "field_count": value} for key, value in source_counts.items()]
+                ),
+                width="stretch",
+                hide_index=True,
+            )
+        else:
+            st.info("No source_report saved yet.")
+    with c2:
+        st.write("Formula status")
+        if formula_counts:
+            st.dataframe(
+                pd.DataFrame([{"status": key, "formula_count": value} for key, value in formula_counts.items()]),
+                width="stretch",
+                hide_index=True,
+            )
+        else:
+            st.info("No formula_results saved yet.")

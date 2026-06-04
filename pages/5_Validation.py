@@ -43,6 +43,7 @@ from typing import Any, Dict, Optional
 
 import pandas as pd
 import streamlit as st
+from utils.ui_helpers import current_context_card, init_state, page_header
 
 # Make imports work when Streamlit runs from the project root or from pages/.
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -74,13 +75,13 @@ try:
         upsert_raw_input_source_row,
     )
 except Exception as exc:  # pragma: no cover - Streamlit display path
-    st.set_page_config(page_title="Validation", page_icon="🧪", layout="wide")
+    st.set_page_config(page_title="Validation", layout="wide")
     st.error("Could not import engine modules. Please confirm engine/factor_engine.py and engine/rating_engine.py exist.")
     st.exception(exc)
     st.stop()
 
 
-st.set_page_config(page_title="Validation", page_icon="🧪", layout="wide")
+st.set_page_config(page_title="Validation", layout="wide")
 
 
 # -----------------------------------------------------------------------------
@@ -120,6 +121,22 @@ def _clean_optional_float(value: Any) -> Optional[float]:
         return None
 
 
+def _arrow_safe_display_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Return a display-only copy with mixed object columns normalized."""
+    if not isinstance(df, pd.DataFrame) or df.empty:
+        return df
+    display_df = df.copy()
+    for col in display_df.columns:
+        if display_df[col].dtype != "object":
+            continue
+        non_null = display_df[col].dropna()
+        type_count = non_null.map(lambda value: type(value).__name__).nunique()
+        if type_count <= 1:
+            continue
+        display_df[col] = display_df[col].map(lambda value: "" if value is None or pd.isna(value) else str(value))
+    return display_df
+
+
 def _show_rating_result(output: Dict[str, Any], benchmark_rating: str = "", benchmark_score: Optional[float] = None) -> None:
     """Render rating-engine output."""
     rr = output.get("rating_result", {})
@@ -133,18 +150,18 @@ def _show_rating_result(output: Dict[str, Any], benchmark_rating: str = "", benc
     col3.metric("Coverage", coverage or "unknown")
     if benchmark_rating:
         cmp = compare_to_benchmark(output, benchmark_rating=benchmark_rating, benchmark_score=benchmark_score)
-        col4.metric("Benchmark Match", "PASS ✅" if cmp["rating_match"] else "CHECK ⚠️")
+        col4.metric("Benchmark Match", "PASS" if cmp["rating_match"] else "CHECK")
     else:
         col4.metric("Benchmark Match", "Not provided")
 
     summary_df = summarize_rating_output(output)
     with st.expander("Rating summary", expanded=True):
-        st.dataframe(summary_df, use_container_width=True, hide_index=True)
+        st.dataframe(summary_df, width="stretch", hide_index=True)
 
     if benchmark_rating:
         cmp = compare_to_benchmark(output, benchmark_rating=benchmark_rating, benchmark_score=benchmark_score)
         with st.expander("Benchmark comparison", expanded=True):
-            st.dataframe(pd.DataFrame([cmp]), use_container_width=True, hide_index=True)
+            st.dataframe(_arrow_safe_display_df(pd.DataFrame([cmp])), width="stretch", hide_index=True)
 
     warnings = rr.get("warnings", []) or []
     if warnings:
@@ -160,17 +177,17 @@ def _show_rating_result(output: Dict[str, Any], benchmark_rating: str = "", benc
     tab1, tab2, tab3, tab4 = st.tabs(["Metric Scores", "Factor Scores", "Section/Profile Scores", "Downloads"])
     with tab1:
         if isinstance(metric_df, pd.DataFrame) and not metric_df.empty:
-            st.dataframe(metric_df, use_container_width=True, hide_index=True)
+            st.dataframe(metric_df, width="stretch", hide_index=True)
         else:
             st.info("No metric-level table returned for this mode.")
     with tab2:
         if isinstance(factor_df, pd.DataFrame) and not factor_df.empty:
-            st.dataframe(factor_df, use_container_width=True, hide_index=True)
+            st.dataframe(factor_df, width="stretch", hide_index=True)
         else:
             st.info("No factor-level table returned for this mode.")
     with tab3:
         if isinstance(section_df, pd.DataFrame) and not section_df.empty:
-            st.dataframe(section_df, use_container_width=True, hide_index=True)
+            st.dataframe(section_df, width="stretch", hide_index=True)
         else:
             st.info("No section/profile-level table returned for this mode.")
     with tab4:
@@ -236,8 +253,13 @@ def _make_factor_output_for_quick_check(methodology_id: str, overall_score: Opti
 # Page UI
 # -----------------------------------------------------------------------------
 
-st.title("🧪 Validation Workspace")
-st.caption("Use this page to compare CreditScope model outputs against official scorecards before building more UI.")
+init_state()
+page_header(
+    "Validation",
+    "Compare model outputs against official scorecards and raw-value fixtures before production use.",
+    "validation",
+)
+current_context_card()
 
 try:
     supported = list_supported_schemes()
@@ -301,7 +323,7 @@ if mode == "Official fixture comparison":
         catalog = load_fixture_catalog(fixture_dir)
         if not catalog.empty:
             with st.expander("Fixture catalog", expanded=True):
-                st.dataframe(catalog, use_container_width=True, hide_index=True)
+                st.dataframe(catalog, width="stretch", hide_index=True)
 
         def _fixture_label(key: str) -> str:
             if catalog.empty or "fixture_key" not in catalog.columns:
@@ -331,21 +353,21 @@ if mode == "Official fixture comparison":
 
             st.session_state["validation_output"] = output
             with st.expander("Official fixture rows", expanded=False):
-                st.dataframe(fixture, use_container_width=True, hide_index=True)
+                st.dataframe(fixture, width="stretch", hide_index=True)
 
             _show_rating_result(output, benchmark_rating=fixture_rating, benchmark_score=fixture_score)
 
             with st.expander("Official summary and model comparison", expanded=True):
                 c1, c2 = st.columns(2)
-                c1.dataframe(report["fixture_summary"], use_container_width=True, hide_index=True)
-                c2.dataframe(report["rating_comparison"], use_container_width=True, hide_index=True)
+                c1.dataframe(report["fixture_summary"], width="stretch", hide_index=True)
+                c2.dataframe(_arrow_safe_display_df(report["rating_comparison"]), width="stretch", hide_index=True)
 
             with st.expander("Official vs model metric comparison", expanded=True):
                 comparison = report["metric_comparison"]
                 if comparison.empty:
                     st.info("No metric-level model output available for comparison.")
                 else:
-                    st.dataframe(comparison, use_container_width=True, hide_index=True)
+                    st.dataframe(comparison, width="stretch", hide_index=True)
 
             current_output = st.session_state.get("rating_output")
             if isinstance(current_output, dict):
@@ -354,7 +376,7 @@ if mode == "Official fixture comparison":
                     if current_comparison.empty:
                         st.info("No current Scoreboard metric output available.")
                     else:
-                        st.dataframe(current_comparison, use_container_width=True, hide_index=True)
+                        st.dataframe(current_comparison, width="stretch", hide_index=True)
         except Exception as exc:
             st.error("Could not run fixture comparison.")
             st.exception(exc)
@@ -378,7 +400,7 @@ elif mode == "Raw-value validation":
         raw_catalog = load_raw_fixture_catalog(raw_dir)
         if not raw_catalog.empty:
             with st.expander("Raw fixture catalog", expanded=False):
-                st.dataframe(raw_catalog, use_container_width=True, hide_index=True)
+                st.dataframe(raw_catalog, width="stretch", hide_index=True)
 
         raw_keys = list(raw_fixtures.keys())
         official_keys = list(official_fixtures.keys())
@@ -459,7 +481,7 @@ elif mode == "Raw-value validation":
                     )
             edited_raw = st.data_editor(
                 raw_fixture_editor,
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 num_rows="fixed",
                 column_config={
@@ -533,27 +555,27 @@ elif mode == "Raw-value validation":
                     ]
                 )
                 with tab1:
-                    st.dataframe(value_comparison, use_container_width=True, hide_index=True)
+                    st.dataframe(value_comparison, width="stretch", hide_index=True)
                 with tab2:
                     if source_summary.empty and formula_source_audit.empty:
                         st.info("No source-quality summary is available.")
                     else:
                         if not source_summary.empty:
-                            st.dataframe(source_summary, use_container_width=True, hide_index=True)
+                            st.dataframe(source_summary, width="stretch", hide_index=True)
                         if not formula_source_audit.empty:
-                            st.dataframe(formula_source_audit, use_container_width=True, hide_index=True)
+                            st.dataframe(formula_source_audit, width="stretch", hide_index=True)
                         if not official_score_overrides.empty:
                             st.write("Official score overrides used in assisted mode")
-                            st.dataframe(official_score_overrides, use_container_width=True, hide_index=True)
+                            st.dataframe(official_score_overrides, width="stretch", hide_index=True)
                 with tab3:
-                    st.dataframe(report["formula_results"], use_container_width=True, hide_index=True)
+                    st.dataframe(report["formula_results"], width="stretch", hide_index=True)
                 with tab4:
                     if score_comparison.empty:
                         st.info("No auto-score comparison is available.")
                     else:
-                        st.dataframe(score_comparison, use_container_width=True, hide_index=True)
+                        st.dataframe(score_comparison, width="stretch", hide_index=True)
                 with tab5:
-                    st.dataframe(report["raw_inputs"], use_container_width=True, hide_index=True)
+                    st.dataframe(report["raw_inputs"], width="stretch", hide_index=True)
                 with tab6:
                     st.download_button(
                         "Download raw value comparison CSV",
@@ -619,7 +641,7 @@ elif mode == "Formula-results upload":
         "value": [243176, 0.28],
     })
     with st.expander("Expected upload format"):
-        st.dataframe(sample, use_container_width=True, hide_index=True)
+        st.dataframe(sample, width="stretch", hide_index=True)
         st.download_button(
             "Download sample formula_results CSV",
             data=sample.to_csv(index=False).encode("utf-8"),
@@ -638,7 +660,7 @@ elif mode == "Formula-results upload":
     if uploaded is not None:
         try:
             formula_df = _read_uploaded_table(uploaded)
-            st.dataframe(formula_df.head(50), use_container_width=True, hide_index=True)
+            st.dataframe(formula_df.head(50), width="stretch", hide_index=True)
             if "formula_id" not in formula_df.columns:
                 st.error("The uploaded file must include a formula_id column.")
             elif st.button("Run formula-results validation", type="primary"):
@@ -669,7 +691,7 @@ else:
 
         edited = st.data_editor(
             editable,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             num_rows="fixed",
             column_config={

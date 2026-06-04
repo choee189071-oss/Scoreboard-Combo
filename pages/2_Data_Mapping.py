@@ -8,7 +8,15 @@ from typing import Any, Dict, List
 import pandas as pd
 import streamlit as st
 from openpyxl import load_workbook
-from utils.ui_helpers import page_header, current_context_card, init_state
+from utils.ui_helpers import (
+    action_panel,
+    current_context_card,
+    init_state,
+    page_header,
+    readiness_action,
+    selected_source_report,
+    source_readiness_counts,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -35,17 +43,17 @@ try:
     )
     from connectors.creditscope_loader import load_creditscope_source_candidates
 except Exception as exc:  # pragma: no cover - Streamlit display path
-    st.set_page_config(page_title="Data Mapping", page_icon="②", layout="wide")
+    st.set_page_config(page_title="Data Mapping", layout="wide")
     st.error("Could not import mapping/calculator engines.")
     st.exception(exc)
     st.stop()
 
 
-st.set_page_config(page_title="Data Mapping", page_icon="②", layout="wide")
+st.set_page_config(page_title="Data Mapping", layout="wide")
 init_state()
 page_header(
-    "② Data Mapping",
-    "Upload source files or enter canonical raw fields. This page builds the issuer_data dictionary used by Calculators.",
+    "Data Mapping",
+    "Build one canonical issuer_data dictionary from uploaded files, API candidates, and manual source-pending fields.",
     "data_mapping",
 )
 current_context_card()
@@ -329,6 +337,16 @@ reset_notice = st.session_state.pop("source_reset_notice", None)
 if reset_notice:
     st.success(reset_notice)
 
+existing_source_report = st.session_state.get("source_report", pd.DataFrame())
+readiness_action(existing_source_report)
+existing_counts = source_readiness_counts(existing_source_report)
+if existing_counts:
+    summary_cols = st.columns(4)
+    summary_cols[0].metric("Independent Ready", existing_counts.get("independent_ready", 0))
+    summary_cols[1].metric("Source Pending", existing_counts.get("source_pending", 0))
+    summary_cols[2].metric("Needs Review", existing_counts.get("needs_review", 0))
+    summary_cols[3].metric("Missing", existing_counts.get("missing", 0))
+
 reset_col, reset_note_col = st.columns([1, 4])
 with reset_col:
     if st.button("Reset source session"):
@@ -338,11 +356,11 @@ with reset_note_col:
     st.caption("Use reset before switching workbook, worksheet, issuer, or methodology source inputs.")
 
 st.divider()
-st.subheader("Mapped Source Files")
-st.caption("CSV/XLSX uploads are mapped through engine.mapping_engine. PDF parsing is intentionally left for the next parser layer.")
+st.subheader("Source Inputs")
+st.caption("Upload one raw workbook when available, then add API candidates for demographic and economic fields.")
 
 source_options = {
-    "creditscope": ("CreditScope", "CreditScope CSV/XLSX"),
+    "creditscope": ("CreditScope", "CreditScope workbook"),
     "ipeds": ("IPEDS_Excel", "IPEDS Excel"),
     "os": ("OS", "Official Statement table extract"),
     "acfr": ("ACFR", "ACFR / Audit table extract"),
@@ -447,11 +465,11 @@ for i, (key, (source_name, label)) in enumerate(source_options.items()):
 
 if match_reports:
     with st.expander("Source mapping reports", expanded=True):
-        st.dataframe(pd.concat(match_reports, ignore_index=True), use_container_width=True, hide_index=True)
+        st.dataframe(pd.concat(match_reports, ignore_index=True), width="stretch", hide_index=True)
 
 st.divider()
-st.subheader("API Source Candidates")
-st.caption("API loaders fetch raw source values only. Formula calculations remain in calculator_engine.")
+st.subheader("API Candidates")
+st.caption("Census and BEA fetch raw source values only. Formula calculations remain in calculator_engine.")
 
 census_default_fields = [field for field in required_field_names if field in supported_census_candidate_fields()]
 with st.expander("Census ACS", expanded=False):
@@ -526,10 +544,10 @@ api_candidate_frames = [
     if isinstance(frame, pd.DataFrame) and not frame.empty
 ]
 if api_candidate_frames:
-    st.dataframe(pd.concat(api_candidate_frames, ignore_index=True), use_container_width=True, hide_index=True)
+    st.dataframe(pd.concat(api_candidate_frames, ignore_index=True), width="stretch", hide_index=True)
 
 st.divider()
-st.subheader("Manual Canonical Fields")
+st.subheader("Manual / Source-Pending Fields")
 st.caption(
     "Manual values are blank by default so stale source data does not re-enter the model. "
     "Only type values here for truly manual/source-pending fields."
@@ -562,7 +580,7 @@ if manual_df.empty:
 else:
     edited = st.data_editor(
         manual_df,
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         num_rows="fixed",
         key=f"manual_source_editor_{methodology_id}",
@@ -588,16 +606,31 @@ if st.button("Save issuer_data", type="primary"):
     st.session_state["source_readiness_summary"] = sourcing_output["source_readiness_summary"]
     st.session_state["source_match_reports"] = pd.concat(match_reports, ignore_index=True) if match_reports else pd.DataFrame()
     st.success(f"Saved {len(sourcing_output['issuer_data'])} canonical fields. Go to Calculators next.")
+    readiness_action(sourcing_output["source_report"])
 
-with st.expander("Source readiness summary", expanded=True):
+with st.expander("Source Readiness Detail", expanded=True):
     readiness = st.session_state.get("source_readiness_summary", pd.DataFrame())
     source_report = st.session_state.get("source_report", pd.DataFrame())
     if isinstance(readiness, pd.DataFrame) and not readiness.empty:
-        st.dataframe(readiness, use_container_width=True, hide_index=True)
+        st.dataframe(readiness, width="stretch", hide_index=True)
     else:
         st.info("No source selection has been saved yet.")
     if isinstance(source_report, pd.DataFrame) and not source_report.empty:
-        st.dataframe(source_report, use_container_width=True, hide_index=True)
+        selected_report = selected_source_report(source_report)
+        tab1, tab2, tab3, tab4 = st.tabs(["Missing", "Ready", "Review", "All Selected"])
+        with tab1:
+            missing = selected_report[selected_report["readiness_status"].astype(str).eq("missing")]
+            st.dataframe(missing, width="stretch", hide_index=True) if not missing.empty else st.info("No selected fields are missing.")
+        with tab2:
+            ready = selected_report[selected_report["readiness_status"].astype(str).eq("independent_ready")]
+            st.dataframe(ready, width="stretch", hide_index=True) if not ready.empty else st.info("No independently ready fields yet.")
+        with tab3:
+            review = selected_report[
+                ~selected_report["readiness_status"].astype(str).isin(["missing", "independent_ready"])
+            ]
+            st.dataframe(review, width="stretch", hide_index=True) if not review.empty else st.info("No source-pending or review fields.")
+        with tab4:
+            st.dataframe(selected_report, width="stretch", hide_index=True)
 
 with st.expander("Current issuer_data", expanded=False):
     data = st.session_state.get("issuer_data", {}) or {}
