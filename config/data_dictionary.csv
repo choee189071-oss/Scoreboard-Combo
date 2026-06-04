@@ -33,6 +33,7 @@ operating_expense,Financial,CreditScope,ACFR,Upload,Raw operating expense
 governmental_revenue,Financial,CreditScope,ACFR,Upload,Raw governmental revenue
 governmental_expense,Financial,CreditScope,ACFR,Upload,Raw governmental expense
 reserve_revenue,Financial,CreditScope,ACFR,Upload,Raw revenue denominator used for reserve and liquidity metrics
+operating_transfers,Financial,CreditScope,ACFR,Upload,Signed transfers used in governmental operating result calculations
 transfers,Financial,CreditScope,ACFR,Upload,Raw transfers in and out
 committed_fund_balance,Financial,CreditScope|ACFR,Manual,Upload,Raw committed fund balance
 assigned_fund_balance,Financial,CreditScope|ACFR,Manual,Upload,Raw assigned fund balance

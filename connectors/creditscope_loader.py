@@ -117,7 +117,7 @@ def _supplemental_match_row(
         "confidence": 0.99,
         "value": value,
         "notes": notes,
-        "status": "ready",
+        "status": "source_review",
     }
 
 
@@ -151,7 +151,7 @@ def _load_sp_local_gov_supplemental_report(uploaded_file: Any) -> pd.DataFrame:
                     "Three-period governmental expense series from S&P Financial Performance tab; signs are normalized to positive expenses.",
                 ),
                 (
-                    "transfers",
+                    "operating_transfers",
                     ["Transfers"],
                     False,
                     "Three-period transfer series from S&P Financial Performance tab; signed values are retained.",

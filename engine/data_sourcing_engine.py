@@ -408,7 +408,7 @@ def _source_quality_status(candidate: Mapping[str, Any], min_confidence: float) 
 
     if status in MISSING_STATUSES or _is_missing_value(candidate.get("value")):
         return "missing"
-    if detail in SOURCE_PENDING_TYPES or source_type in SOURCE_PENDING_TYPES or "pending" in status:
+    if status in SOURCE_PENDING_TYPES or detail in SOURCE_PENDING_TYPES or source_type in SOURCE_PENDING_TYPES or "pending" in status:
         return "source_pending"
     if detail in SCORECARD_IMPLIED_TYPES or source_type in SCORECARD_IMPLIED_TYPES:
         return "scorecard_implied"

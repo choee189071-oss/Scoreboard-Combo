@@ -68,6 +68,7 @@ BASELINE_FIELD_VALUES: Dict[str, float] = {
     "opeb_cost": 2_000_000.0,
     "operating_expense": 285_000_000.0,
     "operating_revenue": 315_000_000.0,
+    "operating_transfers": 0.0,
     "pension_cost": 12_000_000.0,
     "personal_income": 70_000_000_000.0,
     "population": 950_000.0,

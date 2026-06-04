@@ -38,7 +38,7 @@ enrollment_cagr,Enrollment CAGR 3Y,((enrollment_current/enrollment_3yr_prior)^(1
 
 adjusted_operating_margin,Adjusted Operating Margin,(operating_revenue-operating_expense)/operating_revenue,operating_revenue;operating_expense,FinancialPerformance
 
-gov_operating_margin_3yr_avg,Governmental Operating Margin 3Y Average,avg_3yr((governmental_revenue-governmental_expense+transfers)/governmental_revenue),governmental_revenue;governmental_expense;transfers,FinancialPerformance
+gov_operating_margin_3yr_avg,Governmental Operating Margin 3Y Average,avg_3yr((governmental_revenue-governmental_expense+operating_transfers)/governmental_revenue),governmental_revenue;governmental_expense;operating_transfers,FinancialPerformance
 
 coverage_ratio,All-In Coverage Ratio,(operating_revenue-operating_expense)/mads,operating_revenue;operating_expense;mads,FinancialPerformance
 

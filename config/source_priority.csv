@@ -38,6 +38,7 @@ net_pension_liability,default,CreditScope|ACFR|Manual,0.80,true,Raw net pension 
 opeb_cost,default,CreditScope|ACFR|Manual,0.80,true,Raw OPEB cost.
 operating_expense,default,CreditScope|ACFR|Manual,0.80,true,Raw operating expense.
 operating_revenue,default,CreditScope|ACFR|Manual,0.80,true,Raw operating revenue.
+operating_transfers,default,CreditScope|ACFR|Manual,0.80,true,Signed transfers used in governmental operating result calculations.
 pension_cost,default,CreditScope|ACFR|Manual,0.80,true,Raw pension cost.
 personal_income,default,BEA|CensusACS|CreditScope|Manual,0.85,true,Raw local personal income.
 population,default,CensusACS|CreditScope|Manual,0.85,true,Raw population. Keep geography explicit in source notes.
