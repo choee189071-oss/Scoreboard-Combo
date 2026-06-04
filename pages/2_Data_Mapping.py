@@ -15,12 +15,23 @@ if str(PROJECT_ROOT) not in sys.path:
 try:
     from engine.calculator_engine import load_formula_library, parse_required_fields
     from engine.factor_engine import load_factor_template
-    from engine.mapping_engine import map_creditscope_workbook, map_uploaded_file
+    from engine.mapping_engine import map_uploaded_file
     from engine.data_sourcing_engine import (
         mapping_report_to_source_candidates,
         manual_data_to_source_candidates,
         run_data_sourcing_pipeline,
     )
+    from connectors.census_api import (
+        CensusApiError,
+        fetch_census_source_candidates,
+        supported_census_candidate_fields,
+    )
+    from connectors.bea_api import (
+        BeaApiError,
+        fetch_bea_source_candidates,
+        supported_bea_candidate_fields,
+    )
+    from connectors.creditscope_loader import load_creditscope_source_candidates
 except Exception as exc:  # pragma: no cover - Streamlit display path
     st.set_page_config(page_title="Data Mapping", page_icon="②", layout="wide")
     st.error("Could not import mapping/calculator engines.")
@@ -38,6 +49,12 @@ page_header(
 current_context_card()
 
 methodology_id = st.session_state.get("methodology_id", "moodys_ccd_go")
+st.session_state.setdefault("api_source_candidates", {})
+st.session_state.setdefault("api_source_reports", {})
+if st.session_state.get("api_source_methodology_id") != methodology_id:
+    st.session_state["api_source_candidates"] = {}
+    st.session_state["api_source_reports"] = {}
+    st.session_state["api_source_methodology_id"] = methodology_id
 
 
 def _default_value_for_field(field_name: str) -> Any:
@@ -130,6 +147,15 @@ def _clean_edited_values(df: pd.DataFrame) -> Dict[str, Any]:
     return data
 
 
+try:
+    required_fields = _required_fields_for_methodology(methodology_id)
+except Exception as exc:
+    st.warning(f"Could not load required fields for {methodology_id}: {exc}")
+    required_fields = pd.DataFrame(columns=["field_name", "used_by", "category"])
+
+required_field_names = required_fields["field_name"].dropna().astype(str).str.strip().tolist()
+
+
 st.divider()
 st.subheader("Mapped Source Files")
 st.caption("CSV/XLSX uploads are mapped through engine.mapping_engine. PDF parsing is intentionally left for the next parser layer.")
@@ -150,33 +176,31 @@ for i, (key, (source_name, label)) in enumerate(source_options.items()):
         if uploaded is None:
             continue
         try:
-            if source_name == "CreditScope" and uploaded.name.lower().endswith((".xlsx", ".xls")):
-                source_data, report = map_creditscope_workbook(
+            if source_name == "CreditScope":
+                loader_output = load_creditscope_source_candidates(
                     uploaded_file=uploaded,
                     mapping_path="config/field_mapping.csv",
+                    row_mapping_path="config/creditscope_row_mapping.csv",
                     value_col=2,
+                    required_fields=required_field_names,
                 )
-                if not source_data:
-                    uploaded.seek(0)
-                    source_data, report = map_uploaded_file(
-                        uploaded_file=uploaded,
-                        source_name=source_name,
-                        mapping_path="config/field_mapping.csv",
-                    )
+                source_data = loader_output["issuer_data"]
+                report = loader_output["match_report"]
+                source_candidates = loader_output["source_candidates"]
             else:
                 source_data, report = map_uploaded_file(
                     uploaded_file=uploaded,
                     source_name=source_name,
                     mapping_path="config/field_mapping.csv",
                 )
+                source_candidates = mapping_report_to_source_candidates(report, uploaded_file=uploaded.name)
             st.session_state["uploaded_sources"][key] = uploaded.name
             st.success(f"{len(source_data)} fields mapped")
             if not report.empty:
-                report.insert(0, "uploaded_file", uploaded.name)
+                if "uploaded_file" not in report.columns:
+                    report.insert(0, "uploaded_file", uploaded.name)
                 match_reports.append(report)
-                mapped_candidate_frames.append(
-                    mapping_report_to_source_candidates(report, uploaded_file=uploaded.name)
-                )
+                mapped_candidate_frames.append(source_candidates)
         except Exception as exc:
             st.error(f"Could not map {uploaded.name}.")
             st.exception(exc)
@@ -186,14 +210,87 @@ if match_reports:
         st.dataframe(pd.concat(match_reports, ignore_index=True), use_container_width=True, hide_index=True)
 
 st.divider()
+st.subheader("API Source Candidates")
+st.caption("API loaders fetch raw source values only. Formula calculations remain in calculator_engine.")
+
+census_default_fields = [field for field in required_field_names if field in supported_census_candidate_fields()]
+with st.expander("Census ACS", expanded=False):
+    geo_cols = st.columns(4)
+    with geo_cols[0]:
+        census_year = st.number_input("ACS year", min_value=2009, max_value=2026, value=2024, step=1)
+    with geo_cols[1]:
+        state_fips = st.text_input("State FIPS", value="06", max_chars=2)
+    with geo_cols[2]:
+        county_fips = st.text_input("County FIPS", value="013", max_chars=3)
+    with geo_cols[3]:
+        include_proxy_fields = st.checkbox("include proxy fields", value=False)
+
+    selectable_census_fields = supported_census_candidate_fields(include_proxy_fields=include_proxy_fields)
+    selected_census_fields = st.multiselect(
+        "Census fields",
+        options=selectable_census_fields,
+        default=[field for field in census_default_fields if field in selectable_census_fields],
+    )
+    if st.button("Fetch Census candidates"):
+        try:
+            census_candidates = fetch_census_source_candidates(
+                state_fips=state_fips,
+                county_fips=county_fips,
+                year=int(census_year),
+                fields=selected_census_fields,
+                include_proxy_fields=include_proxy_fields,
+            )
+            st.session_state["api_source_candidates"]["census"] = census_candidates
+            st.session_state["api_source_reports"]["census"] = census_candidates
+            st.success(f"Fetched {len(census_candidates)} Census candidate fields")
+        except CensusApiError as exc:
+            st.error("Could not fetch Census ACS data.")
+            st.exception(exc)
+
+bea_default_fields = [field for field in required_field_names if field in supported_bea_candidate_fields()]
+with st.expander("BEA Regional", expanded=False):
+    bea_geo_cols = st.columns(4)
+    with bea_geo_cols[0]:
+        bea_year = st.number_input("BEA year", min_value=2001, max_value=2026, value=2024, step=1)
+    with bea_geo_cols[1]:
+        bea_prior_year = st.number_input("BEA prior year", min_value=2000, max_value=2025, value=2023, step=1)
+    with bea_geo_cols[2]:
+        bea_state_fips = st.text_input("BEA State FIPS", value=state_fips or "06", max_chars=2)
+    with bea_geo_cols[3]:
+        bea_county_fips = st.text_input("BEA County FIPS", value=county_fips or "013", max_chars=3)
+
+    selected_bea_fields = st.multiselect(
+        "BEA fields",
+        options=supported_bea_candidate_fields(),
+        default=bea_default_fields,
+    )
+    if st.button("Fetch BEA candidates"):
+        try:
+            bea_candidates = fetch_bea_source_candidates(
+                state_fips=bea_state_fips,
+                county_fips=bea_county_fips,
+                year=int(bea_year),
+                prior_year=int(bea_prior_year),
+                fields=selected_bea_fields,
+            )
+            st.session_state["api_source_candidates"]["bea"] = bea_candidates
+            st.session_state["api_source_reports"]["bea"] = bea_candidates
+            st.success(f"Fetched {len(bea_candidates)} BEA candidate fields")
+        except BeaApiError as exc:
+            st.error("Could not fetch BEA Regional data.")
+            st.exception(exc)
+
+api_candidate_frames = [
+    frame
+    for frame in st.session_state.get("api_source_candidates", {}).values()
+    if isinstance(frame, pd.DataFrame) and not frame.empty
+]
+if api_candidate_frames:
+    st.dataframe(pd.concat(api_candidate_frames, ignore_index=True), use_container_width=True, hide_index=True)
+
+st.divider()
 st.subheader("Manual Canonical Fields")
 st.caption("These fields come from the selected methodology template and formula_library.csv.")
-
-try:
-    required_fields = _required_fields_for_methodology(methodology_id)
-except Exception as exc:
-    st.warning(f"Could not load required fields for {methodology_id}: {exc}")
-    required_fields = pd.DataFrame(columns=["field_name", "used_by", "category"])
 
 existing = st.session_state.get("issuer_data", {}) or {}
 rows = []
@@ -230,9 +327,8 @@ else:
 if st.button("Save issuer_data", type="primary"):
     manual_data = _clean_edited_values(edited)
     manual_candidates = manual_data_to_source_candidates(manual_data)
-    required_field_names = required_fields["field_name"].dropna().astype(str).str.strip().tolist()
     sourcing_output = run_data_sourcing_pipeline(
-        [*mapped_candidate_frames, manual_candidates],
+        [*mapped_candidate_frames, *api_candidate_frames, manual_candidates],
         methodology_id=methodology_id,
         required_fields=required_field_names,
         source_priority_path="config/source_priority.csv",

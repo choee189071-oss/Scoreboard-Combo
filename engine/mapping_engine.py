@@ -33,6 +33,7 @@ import re
 
 import pandas as pd
 from openpyxl import load_workbook
+from openpyxl.utils import get_column_letter
 
 
 DEFAULT_MAPPING_PATH = Path("config/field_mapping.csv")
@@ -363,6 +364,7 @@ def map_creditscope_workbook(
     issuer_data: Dict[str, Any] = {}
     matches: List[FieldMatch] = []
     labels = label_values["label"].tolist() if not label_values.empty else []
+    sheet_title = ws.title.strip()
     if not label_values.empty:
         label_lookup_df = label_values.drop_duplicates("normalized_label", keep="first")
         by_norm_label = label_lookup_df.set_index("normalized_label").to_dict(orient="index")
@@ -376,6 +378,7 @@ def map_creditscope_workbook(
 
         matched_label = None
         matched_alias = None
+        matched_cell = None
         method = "not_found"
         confidence = 0.0
         value = None
@@ -391,6 +394,7 @@ def map_creditscope_workbook(
             if value is not None and not (isinstance(value, float) and pd.isna(value)):
                 value = float(value) * float(exact["scale"]) if isinstance(value, (int, float)) else value
             matched_label = str(by_norm_label[norm_exact]["label"])
+            matched_cell = f"{sheet_title}!{get_column_letter(target_col)}{row_number}"
             method = "exact_row_mapping"
             confidence = 1.0
             notes = str(exact.get("notes", notes) or notes)
@@ -405,6 +409,8 @@ def map_creditscope_workbook(
             )
             matched_row = by_norm_label.get(normalize_label(matched_label)) if matched_label is not None else None
             value = matched_row.get("value") if matched_row else None
+            if matched_row:
+                matched_cell = f"{sheet_title}!{get_column_letter(value_col)}{int(matched_row['row'])}"
             value = _scale_creditscope_value(field_name, value)
 
         if matched_label is not None and value is not None and not (isinstance(value, float) and pd.isna(value)):
@@ -413,7 +419,7 @@ def map_creditscope_workbook(
             FieldMatch(
                 field_name=field_name,
                 source_name="CreditScope",
-                matched_column=f"{ws.title}!B" if matched_label is not None else None,
+                matched_column=matched_cell if matched_label is not None else None,
                 matched_label=matched_label or matched_alias,
                 match_method=method,
                 confidence=confidence,

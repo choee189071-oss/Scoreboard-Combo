@@ -3,6 +3,7 @@ adjusted_npl,default,MoodysWorkbook|CreditScope|ACFR|Manual,0.70,true,Moody's ad
 adjusted_opeb,default,MoodysWorkbook|CreditScope|ACFR|Manual,0.70,true,Moody's adjusted OPEB liability is source-specific; prefer official Moody's workbook/raw support before generic ACFR.
 adjusted_operating_revenue,default,CreditScope|ACFR|Manual,0.80,true,Raw adjusted revenue denominator for Moody's debt-to-revenue calculations.
 annual_utility_bill,default,OS|RateStudy|Manual,0.75,true,Use raw residential bill or rate-study amount; do not import calculated affordability ratios.
+assessed_value,default,CreditScope|CountyAssessor|OS|Manual,0.80,true,Raw assessed value.
 assessed_value_current,default,CreditScope|CountyAssessor|OS|Manual,0.80,true,Current assessed value for growth formulas.
 assessed_value_prior,default,CreditScope|CountyAssessor|OS|Manual,0.80,true,Prior assessed value for growth formulas.
 assigned_fund_balance,default,CreditScope|ACFR|Manual,0.80,true,Assigned fund balance raw component.
