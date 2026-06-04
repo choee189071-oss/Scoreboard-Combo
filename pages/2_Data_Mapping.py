@@ -72,6 +72,7 @@ SOURCE_SESSION_KEYS = {
 SOURCE_WIDGET_PREFIXES = (
     "upload_",
     "sheet_",
+    "allow_mismatched_sheet_",
     "manual_source_editor_",
 )
 
@@ -240,6 +241,16 @@ def _sheet_match_score(sheet_name: str, uploaded_name: str) -> int:
     return len(upload_tokens & sheet_tokens)
 
 
+def _is_sheet_mismatch(sheet_name: str | None, uploaded_name: str) -> bool:
+    """Return True when a named workbook sheet clearly does not match the uploaded file."""
+    if not sheet_name:
+        return False
+    upload_tokens = _name_tokens(uploaded_name)
+    if not upload_tokens:
+        return False
+    return _sheet_match_score(sheet_name, uploaded_name) == 0
+
+
 def _preferred_sheet_index(sheet_names: List[str], uploaded_name: str) -> int:
     if not sheet_names:
         return 0
@@ -306,8 +317,16 @@ for i, (key, (source_name, label)) in enumerate(source_options.items()):
                     index=default_sheet_idx,
                     key=f"sheet_{key}_{uploaded.name}",
                 )
-                if selected_sheet_name and _sheet_match_score(selected_sheet_name, uploaded.name) == 0:
-                    st.warning("Selected worksheet name does not appear to match the uploaded file name.")
+                if _is_sheet_mismatch(selected_sheet_name, uploaded.name):
+                    st.error("Selected worksheet name does not match the uploaded file name. Pick the matching issuer sheet before saving.")
+                    allow_mismatch = st.checkbox(
+                        "Allow mismatched worksheet anyway",
+                        value=False,
+                        key=f"allow_mismatched_sheet_{key}_{uploaded.name}",
+                        help="Use only for workbooks whose sheet names are generic and cannot match the issuer file name.",
+                    )
+                    if not allow_mismatch:
+                        continue
         try:
             if source_name == "CreditScope":
                 loader_output = load_creditscope_source_candidates(
