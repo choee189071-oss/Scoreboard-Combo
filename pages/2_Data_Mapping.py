@@ -234,6 +234,10 @@ def _name_tokens(value: str) -> set[str]:
     }
 
 
+def _all_name_tokens(value: str) -> set[str]:
+    return {token for token in re.findall(r"[a-z0-9]+", str(value).lower()) if len(token) > 2}
+
+
 def _sheet_match_score(sheet_name: str, uploaded_name: str) -> int:
     upload_tokens = _name_tokens(uploaded_name)
     if not upload_tokens:
@@ -256,6 +260,22 @@ def _sheet_raw_hint_score(sheet_name: str) -> int:
 
 def _is_likely_raw_sheet(sheet_name: str, uploaded_name: str) -> bool:
     return _sheet_match_score(sheet_name, uploaded_name) > 0 and _sheet_raw_hint_score(sheet_name) >= 0
+
+
+def _is_generic_raw_sheet(sheet_name: str) -> bool:
+    generic_tokens = {
+        "credit",
+        "creditscope",
+        "data",
+        "financial",
+        "finance",
+        "raw",
+        "scope",
+        "source",
+        "template",
+    }
+    tokens = _all_name_tokens(sheet_name)
+    return bool(tokens) and tokens <= generic_tokens and _sheet_raw_hint_score(sheet_name) > 0
 
 
 def _is_sheet_mismatch(sheet_name: str | None, uploaded_name: str) -> bool:
@@ -281,7 +301,17 @@ def _preferred_sheet_index(sheet_names: List[str], uploaded_name: str) -> int | 
         if _is_likely_raw_sheet(sheet, uploaded_name)
     ]
     if not scored:
-        return None
+        generic_scored = [
+            (
+                _sheet_raw_hint_score(sheet),
+                -idx,
+            )
+            for idx, sheet in enumerate(sheet_names)
+            if _is_generic_raw_sheet(sheet)
+        ]
+        if len(generic_scored) != 1:
+            return None
+        return -generic_scored[0][1]
     best_idx = -max(scored)[2]
     return max(0, min(best_idx, len(sheet_names) - 1))
 
