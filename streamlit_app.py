@@ -30,6 +30,38 @@ from utils.ui_helpers import (
 st.set_page_config(page_title="Scoreboard Combo", layout="wide")
 init_state()
 
+DOWNSTREAM_STATE_KEYS = [
+    "issuer_data",
+    "source_report",
+    "source_candidates",
+    "source_readiness_summary",
+    "source_match_reports",
+    "uploaded_source_candidates",
+    "uploaded_source_reports",
+    "api_source_candidates",
+    "api_source_reports",
+    "manual_source_candidates",
+    "manual_source_values",
+    "formula_results",
+    "methodology_formula_results",
+    "rating_output",
+]
+
+
+def clear_downstream_state() -> None:
+    for key in DOWNSTREAM_STATE_KEYS:
+        st.session_state.pop(key, None)
+    st.session_state["uploaded_source_candidates"] = {}
+    st.session_state["uploaded_source_reports"] = {}
+    st.session_state["api_source_candidates"] = {}
+    st.session_state["api_source_reports"] = {}
+    st.session_state["manual_source_values"] = {}
+    st.session_state["issuer_data"] = {}
+    st.session_state["formula_results"] = pd.DataFrame()
+    st.session_state["methodology_formula_results"] = pd.DataFrame()
+    st.session_state["rating_output"] = None
+
+
 page_header(
     "Workflow",
     "A focused workspace for sourcing raw issuer data, calculating methodology formulas, and producing an indicative rating.",
@@ -96,6 +128,59 @@ else:
 
 st.subheader("Main Workflow")
 st.caption("A normal user can stay here: confirm sources, run formulas, enter manual scores, then produce the indicative rating.")
+
+methodology_id = st.session_state.get("methodology_id", "moodys_ccd_go")
+issuer_data = st.session_state.get("issuer_data", {}) or {}
+
+with st.container(border=True):
+    st.markdown("**0. Deal Setup**")
+    st.caption("Choose the rating methodology, issuer, and fiscal year before sourcing data.")
+    method_ids = list(SCHEME_OPTIONS.keys())
+    with st.form("deal_setup_form"):
+        setup_cols = st.columns([1.2, 1.2, 0.8])
+        selected_methodology = setup_cols[0].selectbox(
+            "Methodology / scheme",
+            method_ids,
+            index=method_ids.index(methodology_id) if methodology_id in method_ids else 0,
+            format_func=lambda value: SCHEME_OPTIONS.get(value, value),
+        )
+        selected_issuer = setup_cols[1].text_input(
+            "Issuer name",
+            value=st.session_state.get("issuer_name", ""),
+            placeholder="e.g., Contra Costa CCD",
+        )
+        selected_year = setup_cols[2].text_input(
+            "Analysis year / fiscal year",
+            value=str(st.session_state.get("analysis_year", "2023")),
+        )
+        years = st.multiselect(
+            "Years to include for trend formulas",
+            ["Current", "1Y prior", "2Y prior", "3Y prior", "4Y prior", "5Y prior"],
+            default=st.session_state.get("analysis_years_included", ["Current", "1Y prior", "2Y prior", "3Y prior"]),
+        )
+        saved_setup = st.form_submit_button("Save deal setup", type="primary")
+
+    if saved_setup:
+        prior_context = (
+            st.session_state.get("methodology_id"),
+            st.session_state.get("issuer_name"),
+            str(st.session_state.get("analysis_year")),
+        )
+        next_context = (selected_methodology, selected_issuer.strip(), selected_year.strip())
+        st.session_state["methodology_id"] = selected_methodology
+        st.session_state["issuer_name"] = selected_issuer.strip()
+        st.session_state["analysis_year"] = selected_year.strip()
+        st.session_state["analysis_years_included"] = years
+        if prior_context != next_context:
+            clear_downstream_state()
+            st.session_state["setup_saved_notice"] = "Deal setup saved. Downstream source, formula, and rating outputs were reset for the new context."
+        else:
+            st.session_state["setup_saved_notice"] = "Deal setup saved."
+        st.rerun()
+
+setup_notice = st.session_state.pop("setup_saved_notice", None)
+if setup_notice:
+    st.success(setup_notice)
 
 methodology_id = st.session_state.get("methodology_id", "moodys_ccd_go")
 issuer_data = st.session_state.get("issuer_data", {}) or {}
