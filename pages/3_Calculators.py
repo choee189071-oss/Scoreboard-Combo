@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import streamlit as st
@@ -36,6 +37,27 @@ if not issuer_data:
     st.stop()
 
 methodology_id = st.session_state.get("methodology_id", "moodys_ccd_go")
+
+
+def _split_missing_fields(value: Any) -> list[str]:
+    fields: list[str] = []
+    for token in str(value or "").replace(",", ";").split(";"):
+        field = token.strip()
+        if field and field.lower() not in {"manual", "nan", "none"}:
+            fields.append(field)
+    return sorted(set(fields))
+
+
+def _coerce_manual_value(value: Any) -> Any:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if text == "":
+        return None
+    try:
+        return float(text)
+    except Exception:
+        return text
 
 try:
     all_formula_df = calculate_all_formulas(issuer_data, formula_library="config/formula_library.csv")
@@ -85,13 +107,62 @@ display_cols = [
 available_cols = [c for c in display_cols if c in method_formula_df.columns]
 missing_df = method_formula_df[method_formula_df["status"] != "ready"].copy()
 ready_df = method_formula_df[method_formula_df["status"] == "ready"].copy()
-tab1, tab2, tab3 = st.tabs(["Ready", "Missing / Manual / Error", "All Methodology Formulas"])
+
+missing_raw_fields: list[str] = []
+if "missing_fields" in missing_df.columns:
+    for raw in missing_df["missing_fields"].tolist():
+        missing_raw_fields.extend(_split_missing_fields(raw))
+missing_raw_fields = sorted(set(missing_raw_fields))
+
+if missing_raw_fields:
+    with st.expander("Manual inputs for missing raw fields", expanded=True):
+        st.caption("Use this only to unblock calculation when a field is not available from upload/API sources yet.")
+        manual_patch_rows = [
+            {
+                "field_name": field,
+                "value": st.session_state.get("issuer_data", {}).get(field, ""),
+                "used_by_missing_formula": "; ".join(
+                    sorted(
+                        set(
+                            missing_df[
+                                missing_df["missing_fields"].astype(str).str.contains(field, regex=False, na=False)
+                            ]["formula_id"].astype(str)
+                        )
+                    )
+                ),
+            }
+            for field in missing_raw_fields
+        ]
+        manual_patch_df = pd.DataFrame(manual_patch_rows)
+        edited_patch = st.data_editor(
+            manual_patch_df,
+            width="stretch",
+            hide_index=True,
+            num_rows="fixed",
+            key=f"calculator_manual_patch_{methodology_id}",
+            column_config={
+                "field_name": st.column_config.TextColumn("field_name", disabled=True),
+                "value": st.column_config.TextColumn("value"),
+                "used_by_missing_formula": st.column_config.TextColumn("used_by_missing_formula", disabled=True),
+            },
+        )
+        if st.button("Save manual inputs and recalculate"):
+            patch = {
+                str(row.get("field_name", "")).strip(): _coerce_manual_value(row.get("value"))
+                for _, row in edited_patch.iterrows()
+            }
+            patch = {field: value for field, value in patch.items() if field and value is not None}
+            st.session_state["issuer_data"] = {**(st.session_state.get("issuer_data", {}) or {}), **patch}
+            st.success(f"Saved {len(patch)} manual fields. Recalculating.")
+            st.rerun()
+
+tab1, tab2, tab3 = st.tabs(["All Methodology Formulas", "Missing / Manual / Error", "Ready"])
 with tab1:
-    st.dataframe(ready_df[available_cols], width="stretch", hide_index=True) if not ready_df.empty else st.info("No ready formulas yet.")
+    st.dataframe(method_formula_df[available_cols], width="stretch", hide_index=True)
 with tab2:
     st.dataframe(missing_df[available_cols], width="stretch", hide_index=True) if not missing_df.empty else st.info("No missing, manual, or error formulas.")
 with tab3:
-    st.dataframe(method_formula_df[available_cols], width="stretch", hide_index=True)
+    st.dataframe(ready_df[available_cols], width="stretch", hide_index=True) if not ready_df.empty else st.info("No ready formulas yet.")
 
 with st.expander("All formula_library results", expanded=False):
     st.dataframe(all_formula_df, width="stretch", hide_index=True)

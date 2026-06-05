@@ -80,6 +80,38 @@ else:
         "good",
     )
 
+st.subheader("Main Workflow")
+st.caption("Most users should move left to right through these four steps. Validation and Audit are developer checks, not required for a normal run.")
+workflow_cols = st.columns(4)
+with workflow_cols[0]:
+    st.markdown("**1. Deal Setup**")
+    st.caption("Pick methodology, issuer, and year.")
+    st.page_link("pages/1_Deal_Setup.py", label="Open Deal Setup")
+with workflow_cols[1]:
+    st.markdown("**2. Data Mapping**")
+    st.caption("Upload sources, fetch APIs, and fill manual gaps.")
+    st.page_link("pages/2_Data_Mapping.py", label="Open Data Mapping")
+with workflow_cols[2]:
+    st.markdown("**3. Calculators**")
+    st.caption("Run formulas and patch missing raw inputs.")
+    st.page_link("pages/3_Calculators.py", label="Open Calculators")
+with workflow_cols[3]:
+    st.markdown("**4. Scoreboard**")
+    st.caption("Run scoring and review factor output.")
+    st.page_link("pages/4_Scoreboard.py", label="Open Scoreboard")
+
+with st.expander("Developer validation tools", expanded=False):
+    dev_cols = st.columns(3)
+    with dev_cols[0]:
+        st.page_link("pages/5_Validation.py", label="Validation")
+        st.caption("Official fixture and raw-value comparisons.")
+    with dev_cols[1]:
+        st.page_link("pages/7_Methodology_Audit.py", label="Methodology Audit")
+        st.caption("Template, formula, threshold, and source coverage checks.")
+    with dev_cols[2]:
+        st.page_link("pages/6_Export.py", label="Export")
+        st.caption("Download reports and model outputs.")
+
 st.subheader("Current Deal")
 deal_cols = st.columns(3)
 deal_cols[0].metric("Issuer", st.session_state.get("issuer_name") or "Not set")

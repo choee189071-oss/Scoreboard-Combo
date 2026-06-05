@@ -61,10 +61,17 @@ current_context_card()
 methodology_id = st.session_state.get("methodology_id", "moodys_ccd_go")
 st.session_state.setdefault("api_source_candidates", {})
 st.session_state.setdefault("api_source_reports", {})
+st.session_state.setdefault("uploaded_source_candidates", {})
+st.session_state.setdefault("uploaded_source_reports", {})
+st.session_state.setdefault("manual_source_values", {})
 if st.session_state.get("api_source_methodology_id") != methodology_id:
     st.session_state["api_source_candidates"] = {}
     st.session_state["api_source_reports"] = {}
     st.session_state["api_source_methodology_id"] = methodology_id
+if st.session_state.get("upload_source_methodology_id") != methodology_id:
+    st.session_state["uploaded_source_candidates"] = {}
+    st.session_state["uploaded_source_reports"] = {}
+    st.session_state["upload_source_methodology_id"] = methodology_id
 
 
 SOURCE_SESSION_KEYS = {
@@ -73,9 +80,13 @@ SOURCE_SESSION_KEYS = {
     "source_candidates",
     "source_readiness_summary",
     "source_match_reports",
+    "uploaded_source_candidates",
+    "uploaded_source_reports",
     "uploaded_sources",
     "api_source_candidates",
     "api_source_reports",
+    "manual_source_candidates",
+    "manual_source_values",
 }
 SOURCE_WIDGET_PREFIXES = (
     "upload_",
@@ -96,6 +107,10 @@ def _reset_source_session() -> None:
     st.session_state["api_source_candidates"] = {}
     st.session_state["api_source_reports"] = {}
     st.session_state["api_source_methodology_id"] = methodology_id
+    st.session_state["uploaded_source_candidates"] = {}
+    st.session_state["uploaded_source_reports"] = {}
+    st.session_state["upload_source_methodology_id"] = methodology_id
+    st.session_state["manual_source_values"] = {}
     st.session_state["source_reset_notice"] = "Source session reset. Upload/select sources again before saving issuer_data."
 
 
@@ -508,6 +523,8 @@ for i, (key, (source_name, label)) in enumerate(source_options.items()):
                 )
                 source_candidates = mapping_report_to_source_candidates(report, uploaded_file=uploaded.name)
             st.session_state["uploaded_sources"][key] = uploaded.name
+            st.session_state["uploaded_source_candidates"][key] = source_candidates
+            st.session_state["uploaded_source_reports"][key] = report
             st.success(f"{len(source_data)} fields mapped")
             if not report.empty:
                 if "uploaded_file" not in report.columns:
@@ -549,7 +566,6 @@ st.divider()
 st.subheader("API Candidates")
 st.caption("Census and BEA fetch raw source values only. Formula calculations remain in calculator_engine.")
 
-census_default_fields = [field for field in required_field_names if field in supported_census_candidate_fields()]
 with st.expander("Census ACS", expanded=False):
     geo_cols = st.columns(4)
     with geo_cols[0]:
@@ -561,12 +577,8 @@ with st.expander("Census ACS", expanded=False):
     with geo_cols[3]:
         include_proxy_fields = st.checkbox("include proxy fields", value=False)
 
-    selectable_census_fields = supported_census_candidate_fields(include_proxy_fields=include_proxy_fields)
-    selected_census_fields = st.multiselect(
-        "Census fields",
-        options=selectable_census_fields,
-        default=[field for field in census_default_fields if field in selectable_census_fields],
-    )
+    selected_census_fields = supported_census_candidate_fields(include_proxy_fields=include_proxy_fields)
+    st.caption(f"All {len(selected_census_fields)} supported Census fields will be fetched automatically.")
     if st.button("Fetch Census candidates"):
         try:
             census_candidates = fetch_census_source_candidates(
@@ -583,7 +595,6 @@ with st.expander("Census ACS", expanded=False):
             st.error("Could not fetch Census ACS data.")
             st.exception(exc)
 
-bea_default_fields = [field for field in required_field_names if field in supported_bea_candidate_fields()]
 with st.expander("BEA Regional", expanded=False):
     bea_geo_cols = st.columns(4)
     with bea_geo_cols[0]:
@@ -595,11 +606,8 @@ with st.expander("BEA Regional", expanded=False):
     with bea_geo_cols[3]:
         bea_county_fips = st.text_input("BEA County FIPS", value=county_fips or "013", max_chars=3)
 
-    selected_bea_fields = st.multiselect(
-        "BEA fields",
-        options=supported_bea_candidate_fields(),
-        default=bea_default_fields,
-    )
+    selected_bea_fields = supported_bea_candidate_fields()
+    st.caption(f"All {len(selected_bea_fields)} supported BEA fields will be fetched automatically.")
     if st.button("Fetch BEA candidates"):
         try:
             bea_candidates = fetch_bea_source_candidates(
@@ -636,6 +644,7 @@ prefill_manual = st.checkbox(
     value=False,
     help="Use only when you intentionally want the currently saved issuer_data to become editable manual input.",
 )
+manual_draft = st.session_state.get("manual_source_values", {}) or {}
 existing = (st.session_state.get("issuer_data", {}) or {}) if prefill_manual else {}
 rows = []
 for _, row in required_fields.iterrows():
@@ -643,7 +652,7 @@ for _, row in required_fields.iterrows():
     rows.append(
         {
             "field_name": field_name,
-            "value": existing.get(field_name, ""),
+            "value": manual_draft.get(field_name, existing.get(field_name, "")),
             "used_by": row.get("used_by", ""),
             "category": row.get("category", ""),
         }
@@ -652,6 +661,13 @@ for _, row in required_fields.iterrows():
 manual_df = pd.DataFrame(rows)
 if not manual_df.empty:
     manual_df["value"] = manual_df["value"].apply(lambda x: "" if x is None else str(x))
+    source_report_for_manual = selected_source_report(st.session_state.get("source_report", pd.DataFrame()))
+    missing_field_names = set()
+    if isinstance(source_report_for_manual, pd.DataFrame) and not source_report_for_manual.empty:
+        missing_rows = source_report_for_manual[source_report_for_manual["readiness_status"].astype(str).eq("missing")]
+        missing_field_names = set(missing_rows["field_name"].dropna().astype(str))
+    manual_df["input_priority"] = manual_df["field_name"].map(lambda field: "missing_now" if field in missing_field_names else "fallback")
+    manual_df = manual_df.sort_values(["input_priority", "field_name"], ascending=[False, True]).reset_index(drop=True)
 if manual_df.empty:
     st.info("No formula-driven raw fields found for the selected methodology.")
     edited = manual_df
@@ -668,6 +684,7 @@ else:
         key=f"manual_source_editor_{methodology_id}",
         column_config={
             "value": st.column_config.TextColumn("value"),
+            "input_priority": st.column_config.TextColumn("input_priority", disabled=True),
             "used_by": st.column_config.TextColumn("used_by", disabled=True),
             "category": st.column_config.TextColumn("category", disabled=True),
         },
@@ -675,18 +692,41 @@ else:
 
 if st.button("Save issuer_data", type="primary"):
     manual_data = _clean_edited_values(edited)
+    st.session_state["manual_source_values"] = manual_data
     manual_candidates = manual_data_to_source_candidates(manual_data)
+    st.session_state["manual_source_candidates"] = manual_candidates
+    saved_upload_frames = [
+        frame
+        for frame in st.session_state.get("uploaded_source_candidates", {}).values()
+        if isinstance(frame, pd.DataFrame) and not frame.empty
+    ]
+    saved_api_frames = [
+        frame
+        for frame in st.session_state.get("api_source_candidates", {}).values()
+        if isinstance(frame, pd.DataFrame) and not frame.empty
+    ]
     sourcing_output = run_data_sourcing_pipeline(
-        [*mapped_candidate_frames, *api_candidate_frames, manual_candidates],
+        [*saved_upload_frames, *mapped_candidate_frames, *saved_api_frames, *api_candidate_frames, manual_candidates],
         methodology_id=methodology_id,
         required_fields=required_field_names,
         source_priority_path="config/source_priority.csv",
     )
-    st.session_state["issuer_data"] = sourcing_output["issuer_data"]
+    merged_issuer_data = dict(st.session_state.get("issuer_data", {}) or {})
+    merged_issuer_data.update(sourcing_output["issuer_data"])
+    st.session_state["issuer_data"] = merged_issuer_data
     st.session_state["source_report"] = sourcing_output["source_report"]
     st.session_state["source_candidates"] = sourcing_output["source_candidates"]
     st.session_state["source_readiness_summary"] = sourcing_output["source_readiness_summary"]
-    st.session_state["source_match_reports"] = pd.concat(match_reports, ignore_index=True) if match_reports else pd.DataFrame()
+    saved_report_frames = [
+        frame
+        for frame in st.session_state.get("uploaded_source_reports", {}).values()
+        if isinstance(frame, pd.DataFrame) and not frame.empty
+    ]
+    st.session_state["source_match_reports"] = (
+        pd.concat([*saved_report_frames, *match_reports], ignore_index=True)
+        if saved_report_frames or match_reports
+        else pd.DataFrame()
+    )
     st.success(f"Saved {len(sourcing_output['issuer_data'])} canonical fields. Go to Calculators next.")
     readiness_action(sourcing_output["source_report"])
 
