@@ -7,11 +7,11 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from utils.ui_helpers import action_panel, clean_for_display, current_context_card, init_state, page_header
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+from utils.ui_helpers import action_panel, clean_for_display, current_context_card, init_state, page_header
 
 try:
     from engine.rating_engine import summarize_rating_output

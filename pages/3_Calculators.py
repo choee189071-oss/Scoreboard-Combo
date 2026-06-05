@@ -6,11 +6,12 @@ from typing import Any
 
 import pandas as pd
 import streamlit as st
-from utils.ui_helpers import current_context_card, formula_action, init_state, page_header, readiness_action
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+from utils.ui_helpers import current_context_card, formula_action, init_state, page_header, readiness_action
 
 try:
     from engine.calculator_engine import calculate_all_formulas, summarize_calculation_results

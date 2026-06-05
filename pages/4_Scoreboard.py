@@ -6,12 +6,13 @@ from typing import Any, Dict
 
 import pandas as pd
 import streamlit as st
-from utils.manual_scores import render_manual_score_editor
-from utils.ui_helpers import action_panel, clean_for_display, current_context_card, init_state, page_header, status_counts
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+from utils.manual_scores import render_manual_score_editor
+from utils.ui_helpers import action_panel, clean_for_display, current_context_card, init_state, page_header, status_counts
 
 try:
     from engine.factor_engine import load_factor_template

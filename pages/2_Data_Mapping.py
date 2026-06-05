@@ -8,6 +8,11 @@ from typing import Any, Dict, List
 import pandas as pd
 import streamlit as st
 from openpyxl import load_workbook
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from utils.ui_helpers import (
     action_panel,
     current_context_card,
@@ -17,10 +22,6 @@ from utils.ui_helpers import (
     selected_source_report,
     source_readiness_counts,
 )
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
 
 try:
     from engine.calculator_engine import load_formula_library, parse_required_fields
