@@ -3,10 +3,16 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
+from engine.calculator_engine import calculate_all_formulas
+from engine.factor_engine import load_factor_template
+from engine.rating_engine import run_rating_engine, summarize_rating_output
+from utils.manual_scores import render_manual_score_editor
 from utils.ui_helpers import (
     SCHEME_OPTIONS,
     action_panel,
+    clean_for_display,
     current_context_card,
+    formula_action,
     init_state,
     page_header,
     source_readiness_counts,
@@ -81,7 +87,102 @@ else:
     )
 
 st.subheader("Main Workflow")
-st.caption("Most users should move left to right through these four steps. Validation and Audit are developer checks, not required for a normal run.")
+st.caption("A normal user can stay here: confirm sources, run formulas, enter manual scores, then produce the indicative rating.")
+
+methodology_id = st.session_state.get("methodology_id", "moodys_ccd_go")
+issuer_data = st.session_state.get("issuer_data", {}) or {}
+
+with st.container(border=True):
+    st.markdown("**1. Source Data**")
+    if source_counts:
+        st.dataframe(
+            clean_for_display(
+                pd.DataFrame([{"readiness_status": key, "field_count": value} for key, value in source_counts.items()])
+            ),
+            width="stretch",
+            hide_index=True,
+        )
+    else:
+        st.info("No source data has been saved yet.")
+    st.page_link("pages/2_Data_Mapping.py", label="Open source setup only if you need to upload, fetch APIs, or fill missing raw fields")
+
+with st.container(border=True):
+    st.markdown("**2. Formula Calculation**")
+    if issuer_data and st.button("Run formulas from current issuer_data", type="primary"):
+        try:
+            formula_results = calculate_all_formulas(issuer_data)
+            st.session_state["formula_results"] = formula_results
+            try:
+                template = load_factor_template(methodology_id, templates_dir="templates")
+                ids = set(template["formula_id"].dropna().astype(str))
+                st.session_state["methodology_formula_results"] = formula_results[
+                    formula_results["formula_id"].astype(str).isin(ids)
+                ].copy()
+            except Exception:
+                st.session_state["methodology_formula_results"] = formula_results
+            st.success(f"Saved {len(formula_results)} formula results.")
+        except Exception as exc:
+            st.error("Could not run formulas from issuer_data.")
+            st.exception(exc)
+
+    formula_results = st.session_state.get("methodology_formula_results")
+    if not isinstance(formula_results, pd.DataFrame) or formula_results.empty:
+        formula_results = st.session_state.get("formula_results")
+    formula_counts = status_counts(formula_results, "status")
+    if formula_counts:
+        formula_action(formula_counts)
+        show_cols = ["formula_id", "formula_name", "category", "status", "value", "missing_fields", "warning", "error"]
+        st.dataframe(
+            clean_for_display(formula_results[[c for c in show_cols if c in formula_results.columns]]),
+            width="stretch",
+            hide_index=True,
+        )
+    else:
+        st.info("Formula results have not been created yet.")
+        st.page_link("pages/3_Calculators.py", label="Open advanced calculator review")
+
+with st.container(border=True):
+    st.markdown("**3. Manual Scores and Scoreboard**")
+    if isinstance(formula_results, pd.DataFrame) and not formula_results.empty:
+        try:
+            template = load_factor_template(methodology_id, templates_dir="templates")
+            manual_scores = render_manual_score_editor(methodology_id, template, formula_results, key_prefix="home_manual")
+            if st.button("Run scoreboard from current results", type="primary"):
+                output = run_rating_engine(
+                    methodology_id=methodology_id,
+                    formula_results=st.session_state.get("formula_results", formula_results),
+                    manual_scores=manual_scores,
+                    thresholds_path="config/scoring_thresholds.csv",
+                    templates_dir="templates",
+                )
+                st.session_state["rating_output"] = output
+                st.session_state["manual_scores"] = manual_scores
+                st.success("Scoreboard output saved.")
+        except Exception as exc:
+            st.error("Could not prepare scoreboard controls.")
+            st.exception(exc)
+
+    rating_output = st.session_state.get("rating_output")
+    rating_result = rating_output.get("rating_result", {}) if isinstance(rating_output, dict) else {}
+    if rating_result:
+        rating_cols = st.columns(4)
+        rating_cols[0].metric("Indicative Rating", rating_result.get("indicative_rating") or "Missing")
+        rating_cols[1].metric(
+            "Weighted Score",
+            "" if rating_result.get("overall_score") is None else f"{float(rating_result['overall_score']):.3f}",
+        )
+        rating_cols[2].metric("Coverage", rating_result.get("coverage_status", "unknown"))
+        rating_cols[3].metric("Warnings", len(rating_result.get("warnings", []) or []))
+        warnings = rating_result.get("warnings", []) or []
+        for warning in warnings:
+            st.warning(str(warning))
+        with st.expander("Rating summary", expanded=False):
+            st.dataframe(clean_for_display(summarize_rating_output(rating_output)), width="stretch", hide_index=True)
+    elif not isinstance(formula_results, pd.DataFrame) or formula_results.empty:
+        st.info("Run formulas before producing a scoreboard.")
+
+st.subheader("Detailed Pages")
+st.caption("These pages stay available for deeper review. Validation and Audit are mainly developer tools.")
 workflow_cols = st.columns(4)
 with workflow_cols[0]:
     st.markdown("**1. Deal Setup**")

@@ -6,7 +6,7 @@ import re
 
 import pandas as pd
 import streamlit as st
-from utils.ui_helpers import current_context_card, init_state, page_header
+from utils.ui_helpers import clean_for_display, current_context_card, init_state, page_header
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -31,7 +31,7 @@ except Exception as exc:  # pragma: no cover - Streamlit display path
 
 
 def _clean_display_df(df: pd.DataFrame) -> pd.DataFrame:
-    out = df.copy()
+    out = clean_for_display(df)
     for col in ["score_label", "warning", "error", "missing_fields"]:
         if col in out.columns:
             out[col] = out[col].replace({"nan": "", "None": "", "NaN": ""}).fillna("")
@@ -96,7 +96,7 @@ current_context_card()
 
 st.subheader("Five-methodology structural audit")
 summary_df = audit_all_methodologies(AUDIT_METHODOLOGIES)
-st.dataframe(summary_df, width="stretch", hide_index=True)
+st.dataframe(_clean_display_df(summary_df), width="stretch", hide_index=True)
 
 methodology_id = st.selectbox(
     "Methodology",
@@ -137,13 +137,15 @@ with st.expander("Formula / threshold / source audit", expanded=True):
         "metric",
         "expression",
     ]
-    st.dataframe(audit_df[[c for c in show_cols if c in audit_df.columns]], width="stretch", hide_index=True)
+    st.dataframe(_clean_display_df(audit_df[[c for c in show_cols if c in audit_df.columns]]), width="stretch", hide_index=True)
 
 st.subheader("Editable test inputs")
 st.caption("These are baseline raw inputs for formula testing. Replace them with official/workbook values as you validate each methodology.")
 
 existing_data = st.session_state.get("issuer_data", {}) or {}
 default_input_df = issuer_data_editor_frame(methodology_id, existing_data=existing_data)
+if "value" in default_input_df.columns:
+    default_input_df["value"] = pd.to_numeric(default_input_df["value"], errors="coerce")
 
 edited_inputs = st.data_editor(
     default_input_df,
@@ -240,7 +242,7 @@ if isinstance(result, dict) and result.get("methodology_id") == methodology_id:
         df = result.get("method_formula_results", pd.DataFrame())
         display_cols = ["formula_id", "formula_name", "category", "status", "value", "missing_fields", "warning", "error"]
         if isinstance(df, pd.DataFrame) and not df.empty:
-            st.dataframe(df[[c for c in display_cols if c in df.columns]], width="stretch", hide_index=True)
+            st.dataframe(_clean_display_df(df[[c for c in display_cols if c in df.columns]]), width="stretch", hide_index=True)
         else:
             st.info("No formula results.")
 

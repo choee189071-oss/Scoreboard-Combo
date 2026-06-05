@@ -7,7 +7,7 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from utils.ui_helpers import action_panel, current_context_card, init_state, page_header
+from utils.ui_helpers import action_panel, clean_for_display, current_context_card, init_state, page_header
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -122,7 +122,7 @@ with st.expander("Preview current session artifacts", expanded=False):
         st.json(issuer_data)
     if isinstance(source_report, pd.DataFrame) and not source_report.empty:
         st.write("source_report")
-        st.dataframe(source_report, width="stretch", hide_index=True)
+        st.dataframe(clean_for_display(source_report), width="stretch", hide_index=True)
     if isinstance(formula_results, pd.DataFrame) and not formula_results.empty:
         st.write("formula_results")
-        st.dataframe(formula_results, width="stretch", hide_index=True)
+        st.dataframe(clean_for_display(formula_results), width="stretch", hide_index=True)

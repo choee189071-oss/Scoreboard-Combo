@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, Iterable, List, Mapping, Tuple
 import pandas as pd
 import streamlit as st
@@ -208,6 +209,31 @@ def status_counts(df: pd.DataFrame | None, status_col: str) -> Dict[str, int]:
         str(k): int(v)
         for k, v in df[status_col].fillna("unknown").astype(str).value_counts().to_dict().items()
     }
+
+
+def clean_for_display(df: pd.DataFrame | None) -> pd.DataFrame:
+    """Normalize mixed Python objects so Streamlit/Arrow can render tables reliably."""
+    if not isinstance(df, pd.DataFrame) or df.empty:
+        return pd.DataFrame() if df is None else df
+    out = df.copy()
+
+    def clean_value(value: Any) -> Any:
+        if value is None:
+            return ""
+        if isinstance(value, float) and pd.isna(value):
+            return ""
+        if isinstance(value, (list, tuple, set)):
+            return "; ".join(str(v) for v in value if v is not None)
+        if isinstance(value, Mapping):
+            return json.dumps(value, default=str, ensure_ascii=False)
+        if isinstance(value, str) and value.strip().lower() in {"nan", "none", "<na>"}:
+            return ""
+        return value
+
+    for col in out.columns:
+        if out[col].dtype == "object":
+            out[col] = out[col].map(clean_value)
+    return out
 
 
 def selected_source_report(source_report: pd.DataFrame | None) -> pd.DataFrame:

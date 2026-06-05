@@ -6,7 +6,8 @@ from typing import Any, Dict
 
 import pandas as pd
 import streamlit as st
-from utils.ui_helpers import action_panel, current_context_card, init_state, page_header, status_counts
+from utils.manual_scores import render_manual_score_editor
+from utils.ui_helpers import action_panel, clean_for_display, current_context_card, init_state, page_header, status_counts
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -79,7 +80,7 @@ def _render_rating_output(output: Dict[str, Any], benchmark_rating: str) -> None
     c4.metric("Benchmark", benchmark_rating or "Not provided")
 
     with st.expander("Rating summary", expanded=True):
-        st.dataframe(summarize_rating_output(output), width="stretch", hide_index=True)
+        st.dataframe(clean_for_display(summarize_rating_output(output)), width="stretch", hide_index=True)
 
     warnings = rr.get("warnings", []) or []
     if warnings:
@@ -91,74 +92,32 @@ def _render_rating_output(output: Dict[str, Any], benchmark_rating: str) -> None
     tabs = st.tabs(["Metric Scores", "Factor Scores", "Section Scores", "Auto Scores"])
     with tabs[0]:
         df = fe.get("metric_scores", pd.DataFrame())
-        st.dataframe(df, width="stretch", hide_index=True) if isinstance(df, pd.DataFrame) and not df.empty else st.info("No metric table returned.")
+        st.dataframe(clean_for_display(df), width="stretch", hide_index=True) if isinstance(df, pd.DataFrame) and not df.empty else st.info("No metric table returned.")
     with tabs[1]:
         df = fe.get("factor_scores", pd.DataFrame())
-        st.dataframe(df, width="stretch", hide_index=True) if isinstance(df, pd.DataFrame) and not df.empty else st.info("No factor table returned.")
+        st.dataframe(clean_for_display(df), width="stretch", hide_index=True) if isinstance(df, pd.DataFrame) and not df.empty else st.info("No factor table returned.")
     with tabs[2]:
         df = fe.get("section_scores", pd.DataFrame())
-        st.dataframe(df, width="stretch", hide_index=True) if isinstance(df, pd.DataFrame) and not df.empty else st.info("No section table returned.")
+        st.dataframe(clean_for_display(df), width="stretch", hide_index=True) if isinstance(df, pd.DataFrame) and not df.empty else st.info("No section table returned.")
     with tabs[3]:
         auto_scores = output.get("scored_metric_overrides", {}) or {}
         if auto_scores:
             auto_df = pd.DataFrame.from_dict(auto_scores, orient="index")
             auto_df.insert(0, "formula_id", auto_df.index)
-            st.dataframe(auto_df.reset_index(drop=True), width="stretch", hide_index=True)
+            st.dataframe(clean_for_display(auto_df.reset_index(drop=True)), width="stretch", hide_index=True)
         else:
             st.info("No automatic threshold scores were produced.")
 
 with st.expander("Input formula results", expanded=False):
     st.caption("Only template formula_id values are shown here. Full formula_results stay available to the rating engine.")
-    st.dataframe(method_formula_df, width="stretch", hide_index=True)
+    st.dataframe(clean_for_display(method_formula_df), width="stretch", hide_index=True)
 
 st.divider()
 st.subheader("Manual Qualitative Scores")
-st.caption("Only true qualitative fields should be entered here. Numeric threshold scoring is handled by rating_engine.")
-
-manual_candidates = template[
-    template["source_priority"].astype(str).str.contains("Manual", case=False, na=False)
-].copy()
-formula_status = formula_df.set_index("formula_id")["status"].to_dict() if "status" in formula_df.columns else {}
-manual_candidates["formula_status"] = manual_candidates["formula_id"].map(formula_status).fillna("missing")
-
-manual_scores: Dict[str, Any] = {}
-if manual_candidates.empty:
-    st.info("No manual qualitative fields found in this template.")
-else:
-    manual_rows = manual_candidates[
-        ["section", "factor", "metric", "formula_id", "formula_status"]
-    ].drop_duplicates("formula_id")
-    manual_rows["numeric_score"] = None
-    manual_rows["score_label"] = ""
-
-    edited_manual = st.data_editor(
-        manual_rows,
-        width="stretch",
-        hide_index=True,
-        num_rows="fixed",
-        column_config={
-            "numeric_score": st.column_config.NumberColumn(
-                "numeric_score", min_value=0.0, max_value=30.0, step=0.01
-            ),
-            "score_label": st.column_config.TextColumn("score_label"),
-            "section": st.column_config.TextColumn("section", disabled=True),
-            "factor": st.column_config.TextColumn("factor", disabled=True),
-            "metric": st.column_config.TextColumn("metric", disabled=True),
-            "formula_id": st.column_config.TextColumn("formula_id", disabled=True),
-            "formula_status": st.column_config.TextColumn("formula_status", disabled=True),
-        },
-    )
-
-    for _, row in edited_manual.iterrows():
-        fid = str(row.get("formula_id", "")).strip()
-        if not fid:
-            continue
-        numeric = pd.to_numeric(row.get("numeric_score"), errors="coerce")
-        label = str(row.get("score_label", "") or "").strip()
-        if pd.notna(numeric):
-            manual_scores[fid] = {"numeric_score": float(numeric), "score_label": label}
-        elif label:
-            manual_scores[fid] = {"score_label": label}
+st.caption(
+    "Enter analyst-only scores here. S&P Local Government also needs Institutional Framework Rating for the final anchor matrix."
+)
+manual_scores: Dict[str, Any] = render_manual_score_editor(methodology_id, template, formula_df, key_prefix="scoreboard_manual")
 
 benchmark_rating = st.text_input(
     "Benchmark rating optional",
@@ -175,6 +134,7 @@ if st.button("Run scoreboard", type="primary"):
             templates_dir="templates",
         )
         st.session_state["rating_output"] = output
+        st.session_state["manual_scores"] = manual_scores
     except Exception as exc:
         st.error("Rating engine failed.")
         st.exception(exc)
