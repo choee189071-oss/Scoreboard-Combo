@@ -6,13 +6,8 @@ import pandas as pd
 import streamlit as st
 
 WORKFLOW_STEPS: List[Tuple[str, str, str]] = [
-    ("deal_setup", "1", "Deal Setup"),
-    ("data_mapping", "2", "Data Mapping"),
-    ("calculators", "3", "Calculators"),
-    ("scoreboard", "4", "Scoreboard"),
-    ("validation", "5", "Validation"),
-    ("export", "6", "Export"),
-    ("methodology_audit", "7", "Audit"),
+    ("workflow", "1", "Workflow"),
+    ("developer_tools", "2", "Developer Tools"),
 ]
 
 SCHEME_OPTIONS: Dict[str, str] = {
@@ -145,17 +140,11 @@ def inject_css() -> None:
 
 
 def step_status(step_key: str) -> str:
-    if step_key == "deal_setup":
-        return "done" if st.session_state.get("issuer_name") and st.session_state.get("methodology_id") else "todo"
-    if step_key == "data_mapping":
-        return "done" if st.session_state.get("issuer_data") else "todo"
-    if step_key == "calculators":
+    if step_key == "workflow":
+        return "done" if st.session_state.get("rating_output") else "todo"
+    if step_key == "developer_tools":
         df = st.session_state.get("formula_results")
         return "done" if isinstance(df, pd.DataFrame) and not df.empty else "todo"
-    if step_key == "scoreboard":
-        return "done" if st.session_state.get("rating_output") else "todo"
-    if step_key == "validation":
-        return "done" if st.session_state.get("validation_output") else "todo"
     return "todo"
 
 
@@ -195,7 +184,7 @@ def current_context_card() -> None:
           <span class="cs-pill">{methodology}</span>
           <span class="cs-pill">{issuer}</span>
           <span class="cs-pill">FY {year}</span>
-          <div class="cs-muted" style="margin-top:6px;">This context is used across Data Mapping, Calculators, Scoreboard, and Validation.</div>
+          <div class="cs-muted" style="margin-top:6px;">This context is used across the Workflow and Developer Tools pages.</div>
         </div>
         """,
         unsafe_allow_html=True,

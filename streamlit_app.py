@@ -14,6 +14,7 @@ from engine.calculator_engine import calculate_all_formulas
 from engine.factor_engine import load_factor_template
 from engine.rating_engine import run_rating_engine, summarize_rating_output
 from utils.manual_scores import render_manual_score_editor
+from utils.source_workflow import render_source_workflow
 from utils.ui_helpers import (
     SCHEME_OPTIONS,
     action_panel,
@@ -30,9 +31,9 @@ st.set_page_config(page_title="Scoreboard Combo", layout="wide")
 init_state()
 
 page_header(
-    "Workflow Console",
+    "Workflow",
     "A focused workspace for sourcing raw issuer data, calculating methodology formulas, and producing an indicative rating.",
-    "deal_setup",
+    "workflow",
 )
 current_context_card()
 
@@ -58,8 +59,8 @@ status_cols[3].metric("Rating", rating_result.get("indicative_rating") or "Not r
 
 if not source_counts:
     action_panel(
-        "Next step: set up data sources",
-        "Open Deal Setup to confirm the issuer and methodology, then use Data Mapping to upload CreditScope or fetch API candidates.",
+        "Next step: set up source data",
+        "Use Source Data below to upload a raw workbook, fetch Census/BEA candidates, or fill true manual/source-pending fields.",
         "warn",
     )
 elif source_counts.get("missing", 0):
@@ -89,7 +90,7 @@ elif not rating_result:
 else:
     action_panel(
         "Workflow run is available",
-        "Use Scoreboard for factor detail, Validation for fixture comparison, or Export for deliverables.",
+        "Review the rating output below. Developer Tools holds validation, audit, and export utilities.",
         "good",
     )
 
@@ -101,17 +102,7 @@ issuer_data = st.session_state.get("issuer_data", {}) or {}
 
 with st.container(border=True):
     st.markdown("**1. Source Data**")
-    if source_counts:
-        st.dataframe(
-            clean_for_display(
-                pd.DataFrame([{"readiness_status": key, "field_count": value} for key, value in source_counts.items()])
-            ),
-            width="stretch",
-            hide_index=True,
-        )
-    else:
-        st.info("No source data has been saved yet.")
-    st.page_link("pages/2_Data_Mapping.py", label="Open source setup only if you need to upload, fetch APIs, or fill missing raw fields")
+    render_source_workflow(methodology_id)
 
 with st.container(border=True):
     st.markdown("**2. Formula Calculation**")
@@ -146,7 +137,6 @@ with st.container(border=True):
         )
     else:
         st.info("Formula results have not been created yet.")
-        st.page_link("pages/3_Calculators.py", label="Open advanced calculator review")
 
 with st.container(border=True):
     st.markdown("**3. Manual Scores and Scoreboard**")
@@ -188,37 +178,9 @@ with st.container(border=True):
     elif not isinstance(formula_results, pd.DataFrame) or formula_results.empty:
         st.info("Run formulas before producing a scoreboard.")
 
-st.subheader("Detailed Pages")
-st.caption("These pages stay available for deeper review. Validation and Audit are mainly developer tools.")
-workflow_cols = st.columns(4)
-with workflow_cols[0]:
-    st.markdown("**1. Deal Setup**")
-    st.caption("Pick methodology, issuer, and year.")
-    st.page_link("pages/1_Deal_Setup.py", label="Open Deal Setup")
-with workflow_cols[1]:
-    st.markdown("**2. Data Mapping**")
-    st.caption("Upload sources, fetch APIs, and fill manual gaps.")
-    st.page_link("pages/2_Data_Mapping.py", label="Open Data Mapping")
-with workflow_cols[2]:
-    st.markdown("**3. Calculators**")
-    st.caption("Run formulas and patch missing raw inputs.")
-    st.page_link("pages/3_Calculators.py", label="Open Calculators")
-with workflow_cols[3]:
-    st.markdown("**4. Scoreboard**")
-    st.caption("Run scoring and review factor output.")
-    st.page_link("pages/4_Scoreboard.py", label="Open Scoreboard")
-
-with st.expander("Developer validation tools", expanded=False):
-    dev_cols = st.columns(3)
-    with dev_cols[0]:
-        st.page_link("pages/5_Validation.py", label="Validation")
-        st.caption("Official fixture and raw-value comparisons.")
-    with dev_cols[1]:
-        st.page_link("pages/7_Methodology_Audit.py", label="Methodology Audit")
-        st.caption("Template, formula, threshold, and source coverage checks.")
-    with dev_cols[2]:
-        st.page_link("pages/6_Export.py", label="Export")
-        st.caption("Download reports and model outputs.")
+st.subheader("Developer Tools")
+st.caption("Validation, methodology audit, and exports live on the second page so this workflow stays focused.")
+st.page_link("pages/1_Developer_Tools.py", label="Open Developer Tools")
 
 st.subheader("Current Deal")
 deal_cols = st.columns(3)
