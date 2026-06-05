@@ -87,6 +87,10 @@ def _tokens(value: str) -> set[str]:
         "utility",
         "xlsx",
         "xls",
+        "raw",
+        "credit",
+        "scope",
+        "creditscope",
         "2023",
         "2024",
         "2025",
@@ -107,14 +111,20 @@ def _tokens(value: str) -> set[str]:
 def _raw_hint_score(sheet_name: str) -> int:
     lowered = str(sheet_name).lower()
     score = 0
-    if any(token in lowered for token in ["fin", "raw", "creditscope", "credit scope", "financial"]):
+    if any(token in lowered for token in ["fin", "raw", "creditscope", "credit scope"]):
         score += 2
     if any(token in lowered for token in ["scorecard", "public", "summary", "validation"]):
         score -= 3
     return score
 
 
+def _is_generic_raw_sheet(sheet_name: str) -> bool:
+    lowered = re.sub(r"\s+", " ", str(sheet_name).strip().lower())
+    return lowered in {"creditscope", "credit scope", "raw", "fin", "issuer data"}
+
+
 def _auto_sheet(sheet_names: Iterable[str], uploaded_name: str) -> str | None:
+    sheet_names = list(sheet_names)
     upload_tokens = _tokens(uploaded_name)
     ranked: list[tuple[int, int, int, str]] = []
     for idx, sheet in enumerate(sheet_names):
@@ -125,6 +135,9 @@ def _auto_sheet(sheet_names: Iterable[str], uploaded_name: str) -> str | None:
             ranked.append((overlap, hint, -idx, sheet))
     if ranked:
         return max(ranked)[3]
+    generic_exact = [sheet for sheet in sheet_names if _is_generic_raw_sheet(sheet)]
+    if len(generic_exact) == 1:
+        return generic_exact[0]
     generic = [sheet for sheet in sheet_names if _raw_hint_score(sheet) > 0 and not _tokens(sheet)]
     return generic[0] if len(generic) == 1 else None
 
