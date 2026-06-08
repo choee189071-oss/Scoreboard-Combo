@@ -371,6 +371,22 @@ def calculate_formula(row: pd.Series | Dict[str, Any], issuer_data: Dict[str, An
             warning="Manual / qualitative formula; not calculated by calculator engine.",
         )
 
+    if formula_id in issuer_data and not _is_missing_value(issuer_data.get(formula_id)):
+        direct_value = clean_numeric(issuer_data.get(formula_id))
+        if not _is_missing_value(direct_value) and not _is_sequence(direct_value):
+            try:
+                return FormulaResult(
+                    formula_id=formula_id,
+                    formula_name=formula_name,
+                    category=category,
+                    expression=expression,
+                    status=STATUS_READY,
+                    value=float(direct_value),
+                    warning="Direct source metric value supplied; formula expression was not re-derived.",
+                )
+            except (TypeError, ValueError):
+                pass
+
     missing = [field for field in required_fields if field not in issuer_data or _is_missing_value(issuer_data.get(field))]
     if missing:
         return FormulaResult(

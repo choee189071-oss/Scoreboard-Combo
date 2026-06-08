@@ -3,8 +3,8 @@ CreditScope source loader.
 
 This connector wraps the row/column mapping logic in engine.mapping_engine and
 emits the unified source-candidate schema used by engine.data_sourcing_engine.
-It only returns raw source fields; calculated CreditScope ratios remain out of
-the formal data layer.
+Most rows are raw source fields; S&P support-tab methodology metrics are also
+allowed when they avoid ambiguous workbook units or denominators.
 """
 
 from __future__ import annotations
@@ -97,6 +97,25 @@ def _read_period_series(
     return values, cell_range, label
 
 
+def _read_single_metric(
+    ws: Any,
+    *,
+    aliases: Iterable[str],
+    label_col: int = 2,
+    value_col: int = 6,
+) -> tuple[float, str, str] | tuple[None, None, None]:
+    row_idx, label = _find_label_row(ws, aliases, label_col=label_col)
+    if row_idx is None:
+        return None, None, None
+
+    value = clean_numeric_value(ws.cell(row_idx, value_col).value)
+    if value is None or not isinstance(value, (int, float)):
+        return None, None, None
+
+    source_cell = f"{ws.title}!{get_column_letter(value_col)}{row_idx}"
+    return float(value), source_cell, label
+
+
 def _supplemental_match_row(
     *,
     sheet_name: str,
@@ -105,6 +124,8 @@ def _supplemental_match_row(
     source_cell: str,
     source_label: str,
     notes: str,
+    match_method: str = "sp_local_government_supplemental_tab",
+    status: str = "source_review",
 ) -> dict[str, Any]:
     return {
         "sheet_name": sheet_name,
@@ -113,22 +134,22 @@ def _supplemental_match_row(
         "source_type": "Upload",
         "matched_column": source_cell,
         "matched_label": source_label,
-        "match_method": "sp_local_government_supplemental_tab",
+        "match_method": match_method,
         "confidence": 0.99,
         "value": value,
         "notes": notes,
-        "status": "source_review",
+        "status": status,
     }
 
 
 def _load_sp_local_gov_supplemental_report(uploaded_file: Any) -> pd.DataFrame:
     """
-    Extract raw S&P local government inputs from scorecard support tabs.
+    Extract S&P local government inputs from scorecard support tabs.
 
     These tabs contain raw multi-year inputs used by S&P's local-government
-    operating-result and reserve metrics. Debt-service and net-direct-debt tabs
-    are intentionally left out here because their workbook totals require
-    source-specific adjustments before they become canonical raw fields.
+    operating-result and reserve metrics. They also contain direct methodology
+    metric values for debt and pension measures where raw totals often have
+    unit, geography, or adjustment ambiguity.
     """
     rows: list[dict[str, Any]] = []
     workbook = None
@@ -212,6 +233,42 @@ def _load_sp_local_gov_supplemental_report(uploaded_file: Any) -> pd.DataFrame:
                         source_cell=source_cell,
                         source_label=source_label,
                         notes=notes,
+                    )
+                )
+
+        debt_ws = _sheet_by_normalized_name(workbook, "Debt and Liabilities")
+        if debt_ws is not None:
+            debt_metric_specs = [
+                (
+                    "fixed_cost_burden_ratio",
+                    ["Current cost for debt service and liabilities"],
+                    "Direct S&P local-government fixed-cost burden metric from Debt and Liabilities support tab.",
+                ),
+                (
+                    "net_direct_debt_per_capita",
+                    ["Net direct debt per capita"],
+                    "Direct S&P local-government net direct debt per capita metric from Debt and Liabilities support tab.",
+                ),
+                (
+                    "npl_per_capita",
+                    ["Net pension liability (NPL) per capita", "Net pension liability per capita"],
+                    "Direct S&P local-government NPL per capita metric from Debt and Liabilities support tab.",
+                ),
+            ]
+            for field_name, aliases, notes in debt_metric_specs:
+                value, source_cell, source_label = _read_single_metric(debt_ws, aliases=aliases)
+                if value is None:
+                    continue
+                rows.append(
+                    _supplemental_match_row(
+                        sheet_name=debt_ws.title,
+                        field_name=field_name,
+                        value=value,
+                        source_cell=source_cell,
+                        source_label=source_label,
+                        notes=notes,
+                        match_method="sp_local_government_direct_metric",
+                        status="ready",
                     )
                 )
     except Exception:

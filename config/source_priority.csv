@@ -16,6 +16,7 @@ county_ebi,default,CensusACS|BEA|Manual,0.80,true,Raw local income/effective buy
 county_gdp,default,BEA|CreditScope|Manual,0.85,true,Raw county GDP or gross county product.
 county_gdp_current,default,BEA|CreditScope|Manual,0.85,true,Current-period raw county GDP.
 county_gdp_prior,default,BEA|CreditScope|Manual,0.85,true,Prior-period raw county GDP.
+county_population,default,CensusACS|BEA|Manual,0.85,true,County-level population denominator for GDP and personal-income per-capita formulas.
 debt,default,CreditScope|OS|ACFR|Manual,0.80,true,Raw total debt.
 debt_service,default,CreditScope|OS|ACFR|Manual,0.80,true,Raw annual debt service.
 enrollment_3yr_prior,default,IPEDS_Excel|CreditScope|AnnualReport|Manual,0.80,true,Enrollment three years prior.
@@ -28,6 +29,7 @@ fund_balance_ratio_current,default,MoodysWorkbook|CreditScope|ACFR|Manual,0.70,t
 governmental_expense,default,CreditScope|ACFR|Manual,0.80,true,Raw governmental expense.
 governmental_revenue,default,CreditScope|ACFR|Manual,0.80,true,Raw governmental revenue.
 issuer_mfi,default,CensusACS|CreditScope|Manual,0.80,true,Issuer-area median family income.
+issuer_population,default,CreditScope|OS|ACFR|Manual,0.80,true,Issuer or service-area population denominator for debt and pension per-capita formulas; confirm geography before using a county proxy.
 long_term_debt,default,CreditScope|OS|ACFR|Manual,0.80,true,Raw long-term debt.
 mads,default,OS|CreditScope|ACFR|Manual,0.75,true,Maximum annual debt service usually comes from OS/debt schedule.
 median_household_ebi,default,CensusACS|BEA|OS|Manual,0.80,true,Raw median household income/EBI denominator for utility affordability.
@@ -65,3 +67,6 @@ management_assessment,default,Manual|RatingReport,0.50,true,Qualitative/manual s
 management_governance_assessment,default,Manual|RatingReport,0.50,true,Qualitative/manual score only.
 operational_management_assessment,default,Manual|RatingReport|OS,0.50,true,Qualitative/manual score only.
 financial_management_assessment,default,Manual|RatingReport|OS,0.50,true,Qualitative/manual score only.
+fixed_cost_burden_ratio,sp_local_gov_k12,CreditScope|ACFR|Manual,0.80,true,Direct S&P local-government fixed-cost burden metric from Debt and Liabilities support tab. Fallback to raw formula only when no direct metric source exists.
+net_direct_debt_per_capita,sp_local_gov_k12,CreditScope|OS|ACFR|Manual,0.80,true,Direct S&P local-government net direct debt per capita metric from Debt and Liabilities support tab. Fallback to raw debt and population formula only when no direct metric source exists.
+npl_per_capita,sp_local_gov_k12,CreditScope|ACFR|Manual,0.80,true,Direct S&P local-government net pension liability per capita metric from Debt and Liabilities support tab. Avoids unit or geography errors from raw NPL amounts.

@@ -48,6 +48,12 @@ MISSING_STATUSES = {
     "model_missing",
 }
 
+DIRECT_METRIC_SOURCE_FIELDS = {
+    "fixed_cost_burden_ratio",
+    "net_direct_debt_per_capita",
+    "npl_per_capita",
+}
+
 CANDIDATE_COLUMNS = [
     "field_name",
     "value",
@@ -250,6 +256,7 @@ def required_fields_for_methodology(
         for field in parse_required_fields(row.get("required_data", "")):
             if field != "manual":
                 fields.append(field)
+    fields.extend(sorted(formula_ids.intersection(DIRECT_METRIC_SOURCE_FIELDS)))
     return sorted(set(fields))
 
 
