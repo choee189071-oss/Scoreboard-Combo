@@ -34,7 +34,7 @@ from utils.ui_helpers import (
 
 st.set_page_config(page_title="Scoreboard Combo", layout="wide")
 init_state()
-st.sidebar.caption("Build: direct-metrics-cache-v2")
+st.sidebar.caption("Build: direct-metrics-cache-v3")
 
 DOWNSTREAM_STATE_KEYS = [
     "issuer_data",

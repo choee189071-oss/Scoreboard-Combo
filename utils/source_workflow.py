@@ -41,7 +41,7 @@ SOURCE_SESSION_KEYS = {
     "workbook_direct_metric_debug",
 }
 
-SOURCE_WORKFLOW_CACHE_VERSION = "direct-metrics-cache-v2"
+SOURCE_WORKFLOW_CACHE_VERSION = "direct-metrics-cache-v3"
 
 
 def _uploaded_file_payload(uploaded_file: Any) -> tuple[str, bytes]:

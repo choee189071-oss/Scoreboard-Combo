@@ -50,8 +50,10 @@ MISSING_STATUSES = {
 
 DIRECT_METRIC_SOURCE_FIELDS = {
     "fixed_cost_burden_ratio",
+    "gdp_per_capita_ratio",
     "net_direct_debt_per_capita",
     "npl_per_capita",
+    "personal_income_ratio",
 }
 
 CANDIDATE_COLUMNS = [

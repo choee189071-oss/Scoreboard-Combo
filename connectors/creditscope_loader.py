@@ -236,6 +236,41 @@ def _load_sp_local_gov_supplemental_report(uploaded_file: Any) -> pd.DataFrame:
                     )
                 )
 
+        economy_ws = _sheet_by_normalized_name(workbook, "Economy")
+        if economy_ws is not None:
+            economy_metric_specs = [
+                (
+                    "gdp_per_capita_ratio",
+                    ["Per Capita"],
+                    "Direct S&P local-government real GCP per-capita ratio from Economy support tab.",
+                ),
+                (
+                    "personal_income_ratio",
+                    ["Per Capita Personal Income"],
+                    "Direct S&P local-government PCPI ratio from Economy support tab.",
+                ),
+            ]
+            for field_name, aliases, notes in economy_metric_specs:
+                value, source_cell, source_label = _read_single_metric(
+                    economy_ws,
+                    aliases=aliases,
+                    value_col=5,
+                )
+                if value is None:
+                    continue
+                rows.append(
+                    _supplemental_match_row(
+                        sheet_name=economy_ws.title,
+                        field_name=field_name,
+                        value=value,
+                        source_cell=source_cell,
+                        source_label=source_label,
+                        notes=notes,
+                        match_method="sp_local_government_direct_metric",
+                        status="ready",
+                    )
+                )
+
         debt_ws = _sheet_by_normalized_name(workbook, "Debt and Liabilities")
         if debt_ws is not None:
             debt_metric_specs = [

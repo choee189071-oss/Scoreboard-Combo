@@ -67,6 +67,8 @@ management_assessment,default,Manual|RatingReport,0.50,true,Qualitative/manual s
 management_governance_assessment,default,Manual|RatingReport,0.50,true,Qualitative/manual score only.
 operational_management_assessment,default,Manual|RatingReport|OS,0.50,true,Qualitative/manual score only.
 financial_management_assessment,default,Manual|RatingReport|OS,0.50,true,Qualitative/manual score only.
+gdp_per_capita_ratio,sp_local_gov_k12,CreditScope|BEA|Manual,0.80,true,Direct S&P local-government real GCP per-capita ratio from Economy support tab. Fallback to BEA raw formula only when no direct workbook ratio exists.
 fixed_cost_burden_ratio,sp_local_gov_k12,CreditScope|ACFR|Manual,0.80,true,Direct S&P local-government fixed-cost burden metric from Debt and Liabilities support tab. Fallback to raw formula only when no direct metric source exists.
 net_direct_debt_per_capita,sp_local_gov_k12,CreditScope|OS|ACFR|Manual,0.80,true,Direct S&P local-government net direct debt per capita metric from Debt and Liabilities support tab. Fallback to raw debt and population formula only when no direct metric source exists.
 npl_per_capita,sp_local_gov_k12,CreditScope|ACFR|Manual,0.80,true,Direct S&P local-government net pension liability per capita metric from Debt and Liabilities support tab. Avoids unit or geography errors from raw NPL amounts.
+personal_income_ratio,sp_local_gov_k12,CreditScope|BEA|CensusACS|Manual,0.80,true,Direct S&P local-government PCPI ratio from Economy support tab. Fallback to BEA/Census raw formula only when no direct workbook ratio exists.
