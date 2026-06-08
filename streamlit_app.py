@@ -12,6 +12,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from engine.calculator_engine import calculate_all_formulas
 from engine.factor_engine import load_factor_template
+from engine.rating_audit import build_rating_audit_trail
 from engine.rating_engine import run_rating_engine, summarize_rating_output
 from utils.manual_scores import render_manual_score_editor
 from utils.source_workflow import render_source_workflow
@@ -46,6 +47,71 @@ DOWNSTREAM_STATE_KEYS = [
     "methodology_formula_results",
     "rating_output",
 ]
+
+LOCAL_GOV_DIAGNOSTIC_NOTES = {
+    "gdp_per_capita_ratio": (
+        "Source/denominator check: uses county_population with county_gdp, then compares against "
+        "U.S. GDP per capita. A variance from the workbook usually means Census/BEA live geography "
+        "differs from the scorecard denominator, not that the formula arithmetic is broken."
+    ),
+    "npl_per_capita": (
+        "Unit/denominator check: uses net_pension_liability divided by issuer_population. If this "
+        "looks far from the sample, verify whether NPL is stored in dollars vs. thousands and whether "
+        "issuer_population is the actual issuer/service-area denominator."
+    ),
+    "fixed_cost_burden_ratio": (
+        "Source component check: needs debt_service, pension_cost, opeb_cost, and governmental_revenue. "
+        "Missing pension/OPEB costs will understate the burden even when debt_service is present."
+    ),
+}
+
+
+def local_gov_formula_diagnostics(formula_results: pd.DataFrame, issuer_data: dict) -> pd.DataFrame:
+    if not isinstance(formula_results, pd.DataFrame) or formula_results.empty:
+        return pd.DataFrame()
+    if "formula_id" not in formula_results.columns:
+        return pd.DataFrame()
+
+    rows: list[dict[str, object]] = []
+    indexed = formula_results.drop_duplicates(subset=["formula_id"], keep="first").set_index("formula_id")
+    for formula_id, note in LOCAL_GOV_DIAGNOSTIC_NOTES.items():
+        if formula_id not in indexed.index:
+            continue
+        result = indexed.loc[formula_id]
+        missing_fields = str(result.get("missing_fields", "") or "")
+        status = str(result.get("status", "") or "")
+        value = result.get("value")
+
+        if status == "missing":
+            diagnosis = f"Missing required field(s): {missing_fields or 'unknown'}."
+        elif formula_id == "npl_per_capita":
+            has_npl = issuer_data.get("net_pension_liability") not in (None, "")
+            has_population = issuer_data.get("issuer_population") not in (None, "")
+            diagnosis = "Ready. Check NPL unit and issuer_population denominator if sample variance remains."
+            if not has_npl or not has_population:
+                diagnosis = "Needs net_pension_liability and issuer_population; do not substitute county population silently."
+        elif formula_id == "fixed_cost_burden_ratio":
+            cost_fields = ["debt_service", "pension_cost", "opeb_cost", "governmental_revenue"]
+            missing_cost_fields = [field for field in cost_fields if issuer_data.get(field) in (None, "")]
+            diagnosis = (
+                "Ready. Verify pension_cost and opeb_cost are included in the same dollar unit as debt_service."
+                if not missing_cost_fields
+                else f"Missing/blank component(s): {', '.join(missing_cost_fields)}."
+            )
+        else:
+            diagnosis = "Ready. Compare live BEA/Census geography against the official workbook denominator."
+
+        rows.append(
+            {
+                "formula_id": formula_id,
+                "status": status,
+                "value": value,
+                "missing_fields": missing_fields,
+                "diagnosis": diagnosis,
+                "why_it_matters": note,
+            }
+        )
+    return pd.DataFrame(rows)
 
 
 def clear_downstream_state() -> None:
@@ -220,6 +286,11 @@ with st.container(border=True):
             width="stretch",
             hide_index=True,
         )
+        if methodology_id == "sp_local_gov_k12":
+            diagnostics = local_gov_formula_diagnostics(formula_results, issuer_data)
+            if not diagnostics.empty:
+                with st.expander("S&P Local Gov key formula diagnostics", expanded=True):
+                    st.dataframe(clean_for_display(diagnostics), width="stretch", hide_index=True)
     else:
         st.info("Formula results have not been created yet.")
 
@@ -228,8 +299,15 @@ with st.container(border=True):
     if isinstance(formula_results, pd.DataFrame) and not formula_results.empty:
         try:
             template = load_factor_template(methodology_id, templates_dir="templates")
-            manual_scores = render_manual_score_editor(methodology_id, template, formula_results, key_prefix="home_manual")
-            if st.button("Run scoreboard from current results", type="primary"):
+            with st.form(f"scoreboard_manual_form_{methodology_id}"):
+                manual_scores = render_manual_score_editor(
+                    methodology_id,
+                    template,
+                    formula_results,
+                    key_prefix="home_manual",
+                )
+                run_scoreboard = st.form_submit_button("Run scoreboard from current results", type="primary")
+            if run_scoreboard:
                 output = run_rating_engine(
                     methodology_id=methodology_id,
                     formula_results=st.session_state.get("formula_results", formula_results),
@@ -260,6 +338,59 @@ with st.container(border=True):
             st.warning(str(warning))
         with st.expander("Rating summary", expanded=False):
             st.dataframe(clean_for_display(summarize_rating_output(rating_output)), width="stretch", hide_index=True)
+        with st.expander("Show Rating Audit Trail", expanded=False):
+            audit = build_rating_audit_trail(
+                methodology_id=methodology_id,
+                rating_output=rating_output,
+                formula_results=st.session_state.get("formula_results", formula_results),
+                source_report=st.session_state.get("source_report"),
+                issuer_data=st.session_state.get("issuer_data", {}) or {},
+                manual_scores=st.session_state.get("manual_scores", {}) or {},
+            )
+            final_trace = audit.get("final_trace", pd.DataFrame())
+            factor_trace = audit.get("factor_trace", pd.DataFrame())
+            metric_trace = audit.get("metric_trace", pd.DataFrame())
+            if not final_trace.empty:
+                st.write("Final calculation")
+                st.dataframe(clean_for_display(final_trace), width="stretch", hide_index=True)
+            if not factor_trace.empty:
+                st.write("Factor contributions")
+                factor_cols = [
+                    "section",
+                    "factor",
+                    "factor_score",
+                    "factor_weight",
+                    "weighted_contribution",
+                    "coverage_pct",
+                    "status",
+                    "calculation",
+                ]
+                st.dataframe(
+                    clean_for_display(factor_trace[[c for c in factor_cols if c in factor_trace.columns]]),
+                    width="stretch",
+                    hide_index=True,
+                )
+            if not metric_trace.empty:
+                st.write("Metric trace")
+                metric_cols = [
+                    "section",
+                    "factor",
+                    "metric",
+                    "raw_metric_value",
+                    "bucket_used",
+                    "numeric_score",
+                    "metric_weight",
+                    "factor_weight",
+                    "weighted_contribution",
+                    "source_used",
+                    "threshold_source",
+                    "score_status",
+                ]
+                st.dataframe(
+                    clean_for_display(metric_trace[[c for c in metric_cols if c in metric_trace.columns]]),
+                    width="stretch",
+                    hide_index=True,
+                )
     elif not isinstance(formula_results, pd.DataFrame) or formula_results.empty:
         st.info("Run formulas before producing a scoreboard.")
 

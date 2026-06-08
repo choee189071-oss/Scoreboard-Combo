@@ -60,6 +60,27 @@ def manual_scores_from_editor(edited_manual: pd.DataFrame) -> Dict[str, Any]:
     return manual_scores
 
 
+def _latest_editor_frame(base_frame: pd.DataFrame, edited_frame: pd.DataFrame, editor_key: str) -> pd.DataFrame:
+    latest = edited_frame.copy() if isinstance(edited_frame, pd.DataFrame) else base_frame.copy()
+    state = st.session_state.get(editor_key)
+    edited_rows = state.get("edited_rows", {}) if isinstance(state, dict) else {}
+    if not isinstance(edited_rows, dict) or latest.empty:
+        return latest
+    for row_key, updates in edited_rows.items():
+        if not isinstance(updates, dict):
+            continue
+        try:
+            row_idx = int(row_key)
+        except (TypeError, ValueError):
+            continue
+        if row_idx < 0 or row_idx >= len(latest.index):
+            continue
+        for col, value in updates.items():
+            if col in latest.columns:
+                latest.iat[row_idx, latest.columns.get_loc(col)] = value
+    return latest
+
+
 def render_manual_score_editor(
     methodology_id: str,
     template: pd.DataFrame,
@@ -92,12 +113,13 @@ def render_manual_score_editor(
             "For the West Sacramento fixture, use 2 if you are reproducing the official sample."
         )
 
+    editor_key = f"{key_prefix}_{methodology_id}"
     edited = st.data_editor(
         rows[["section", "factor", "metric", "formula_id", "formula_status", "numeric_score", "score_label"]],
         width="stretch",
         hide_index=True,
         num_rows="fixed",
-        key=f"{key_prefix}_{methodology_id}",
+        key=editor_key,
         column_config={
             "section": st.column_config.TextColumn("section", disabled=True),
             "factor": st.column_config.TextColumn("factor", disabled=True),
@@ -111,8 +133,10 @@ def render_manual_score_editor(
         },
     )
 
-    scores = manual_scores_from_editor(edited)
+    latest = _latest_editor_frame(rows, edited, editor_key)
+    scores = manual_scores_from_editor(latest)
     for fid in candidate_ids:
         stored.pop(fid, None)
     stored.update(scores)
+    st.session_state["manual_scores"] = dict(stored)
     return {fid: stored[fid] for fid in candidate_ids if fid in stored}

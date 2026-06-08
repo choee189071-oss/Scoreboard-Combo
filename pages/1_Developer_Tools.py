@@ -12,6 +12,13 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from engine.methodology_audit import AUDIT_METHODOLOGIES, audit_all_methodologies, build_methodology_audit
+from engine.rating_audit import (
+    audit_metric_csv,
+    audit_pdf_bytes,
+    audit_trail_to_json,
+    audit_trail_to_markdown,
+    build_rating_audit_trail,
+)
 from engine.rating_engine import summarize_rating_output
 from utils.ui_helpers import clean_for_display, current_context_card, init_state, page_header
 
@@ -118,6 +125,45 @@ with tabs[1]:
         if isinstance(rating_output, dict):
             rating_summary = summarize_rating_output(rating_output)
             _download_dataframe("Download rating_summary.csv", rating_summary, "rating_summary.csv")
+            audit = build_rating_audit_trail(
+                methodology_id=methodology_id,
+                rating_output=rating_output,
+                formula_results=formula_results,
+                source_report=source_report,
+                issuer_data=issuer_data,
+                manual_scores=st.session_state.get("manual_scores", {}) or {},
+            )
+            audit_markdown = audit_trail_to_markdown(audit, title="CreditScope Rating Audit Trail")
+            st.download_button(
+                "Download rating_audit_trail.csv",
+                data=audit_metric_csv(audit),
+                file_name="rating_audit_trail.csv",
+                mime="text/csv",
+            )
+            st.download_button(
+                "Download rating_audit_trail.json",
+                data=audit_trail_to_json(audit).encode("utf-8"),
+                file_name="rating_audit_trail.json",
+                mime="application/json",
+            )
+            st.download_button(
+                "Download rating_report.md",
+                data=audit_markdown.encode("utf-8"),
+                file_name="rating_report.md",
+                mime="text/markdown",
+            )
+            st.download_button(
+                "Download rating_audit_report.pdf",
+                data=audit_pdf_bytes(audit_markdown),
+                file_name="rating_audit_report.pdf",
+                mime="application/pdf",
+            )
+            st.download_button(
+                "Download presentation_audit_outline.md",
+                data=audit_markdown.encode("utf-8"),
+                file_name="presentation_audit_outline.md",
+                mime="text/markdown",
+            )
             st.download_button(
                 "Download rating_output.json",
                 data=json.dumps(rating_output, default=str, indent=2).encode("utf-8"),

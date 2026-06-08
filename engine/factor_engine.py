@@ -642,6 +642,24 @@ def aggregate_overall_score(methodology_id: str, section_score_df: pd.DataFrame)
     return float((scored["section_score"] * scored["section_weight"]).sum() / available_weight) if available_weight else None
 
 
+def coverage_status_for_metric(row: Mapping[str, Any]) -> str:
+    """Coverage is complete once a formula is ready or a manual score exists."""
+    formula_status = str(row.get("formula_status", "") or "").lower().strip()
+    numeric_score = row.get("numeric_score")
+    if formula_status in {STATUS_READY, "ready"} or not _is_missing(numeric_score):
+        return STATUS_READY
+    status = str(row.get("status", "") or "").lower().strip()
+    if status in {STATUS_ERROR, "error"}:
+        return STATUS_ERROR
+    if status in {STATUS_NEEDS_SCORE, "needs_score"}:
+        return STATUS_NEEDS_SCORE
+    if formula_status in {STATUS_MANUAL, "manual"} or status in {STATUS_MANUAL, "manual"}:
+        return STATUS_MANUAL
+    if status in {STATUS_PARTIAL, "partial"}:
+        return STATUS_PARTIAL
+    return STATUS_MISSING
+
+
 def score_to_indicative_rating(methodology_id: str, score: Optional[float]) -> str:
     """Map weighted score to an indicative rating range when a simple scale is available."""
     if score is None:
@@ -689,7 +707,10 @@ def run_factor_engine(
     overall = aggregate_overall_score(methodology_id, section_df)
     indicative = score_to_indicative_rating(methodology_id, overall)
 
-    metric_counts = metric_df["status"].value_counts().to_dict() if not metric_df.empty else {}
+    if not metric_df.empty:
+        metric_df = metric_df.copy()
+        metric_df["coverage_status"] = metric_df.apply(coverage_status_for_metric, axis=1)
+    metric_counts = metric_df["coverage_status"].value_counts().to_dict() if not metric_df.empty else {}
     factor_counts = factor_df["status"].value_counts().to_dict() if not factor_df.empty else {}
 
     coverage_summary = {

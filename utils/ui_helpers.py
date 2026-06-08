@@ -14,7 +14,6 @@ SCHEME_OPTIONS: Dict[str, str] = {
     "moodys_ccd_go": "Moody's CCD GO",
     "moodys_k12": "Moody's K-12",
     "sp_local_gov_k12": "S&P Local Gov / K-12 GO",
-    "sp_local_gov": "S&P Local Government",
     "sp_water_sewer": "S&P Water / Sewer Utility",
     "sp_community_college_go": "S&P Community College GO",
 }

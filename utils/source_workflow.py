@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
@@ -32,11 +33,120 @@ SOURCE_SESSION_KEYS = {
     "uploaded_source_candidates",
     "uploaded_source_reports",
     "uploaded_sources",
+    "uploaded_issuer_data",
     "api_source_candidates",
     "api_source_reports",
     "manual_source_candidates",
     "manual_source_values",
+    "workbook_direct_metric_debug",
 }
+
+
+def _uploaded_file_payload(uploaded_file: Any) -> tuple[str, bytes]:
+    name = str(getattr(uploaded_file, "name", "") or "uploaded_file")
+    if hasattr(uploaded_file, "seek"):
+        uploaded_file.seek(0)
+    if hasattr(uploaded_file, "getvalue"):
+        payload = uploaded_file.getvalue()
+    else:
+        payload = uploaded_file.read()
+    if isinstance(payload, str):
+        payload = payload.encode("utf-8")
+    if hasattr(uploaded_file, "seek"):
+        uploaded_file.seek(0)
+    return name, bytes(payload)
+
+
+def _upload_buffer(file_name: str, payload: bytes) -> io.BytesIO:
+    buffer = io.BytesIO(payload)
+    buffer.name = file_name
+    return buffer
+
+
+@st.cache_data(show_spinner=False)
+def _cached_required_names(methodology_id: str) -> tuple[str, ...]:
+    return tuple(required_fields_for_methodology(methodology_id))
+
+
+@st.cache_data(show_spinner=False)
+def _cached_excel_sheet_names(file_name: str, payload: bytes) -> List[str]:
+    if Path(file_name).suffix.lower() not in {".xlsx", ".xls"}:
+        return []
+    workbook = None
+    try:
+        workbook = load_workbook(_upload_buffer(file_name, payload), read_only=True, data_only=True)
+        return list(workbook.sheetnames)
+    except Exception:
+        return []
+    finally:
+        if workbook is not None:
+            workbook.close()
+
+
+@st.cache_data(show_spinner=False)
+def _cached_creditscope_mapping(
+    file_name: str,
+    payload: bytes,
+    sheet_name: str | None,
+    required_fields: tuple[str, ...],
+) -> Dict[str, Any]:
+    return load_creditscope_source_candidates(
+        uploaded_file=_upload_buffer(file_name, payload),
+        mapping_path="config/field_mapping.csv",
+        row_mapping_path="config/creditscope_row_mapping.csv",
+        sheet_name=sheet_name,
+        value_col=2,
+        required_fields=list(required_fields),
+    )
+
+
+@st.cache_data(show_spinner=False)
+def _cached_mapped_upload(
+    file_name: str,
+    payload: bytes,
+    source_name: str,
+) -> tuple[Dict[str, Any], pd.DataFrame, pd.DataFrame]:
+    source_data, report = map_uploaded_file(
+        uploaded_file=_upload_buffer(file_name, payload),
+        source_name=source_name,
+        mapping_path="config/field_mapping.csv",
+    )
+    candidates = mapping_report_to_source_candidates(report, uploaded_file=file_name)
+    return source_data, report, candidates
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _cached_census_source_candidates(
+    state_fips: str,
+    county_fips: str,
+    year: int,
+    fields: tuple[str, ...],
+    include_proxy_fields: bool,
+) -> pd.DataFrame:
+    return fetch_census_source_candidates(
+        state_fips=state_fips,
+        county_fips=county_fips,
+        year=year,
+        fields=list(fields),
+        include_proxy_fields=include_proxy_fields,
+    )
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _cached_bea_source_candidates(
+    state_fips: str,
+    county_fips: str,
+    year: int,
+    prior_year: int,
+    fields: tuple[str, ...],
+) -> pd.DataFrame:
+    return fetch_bea_source_candidates(
+        state_fips=state_fips,
+        county_fips=county_fips,
+        year=year,
+        prior_year=prior_year,
+        fields=list(fields),
+    )
 
 
 def _reset_source_session(methodology_id: str) -> None:
@@ -48,6 +158,7 @@ def _reset_source_session(methodology_id: str) -> None:
     st.session_state["uploaded_sources"] = {}
     st.session_state["uploaded_source_candidates"] = {}
     st.session_state["uploaded_source_reports"] = {}
+    st.session_state["uploaded_issuer_data"] = {}
     st.session_state["api_source_candidates"] = {}
     st.session_state["api_source_reports"] = {}
     st.session_state["manual_source_values"] = {}
@@ -56,22 +167,8 @@ def _reset_source_session(methodology_id: str) -> None:
 
 
 def _excel_sheet_names(uploaded_file: Any) -> List[str]:
-    name = str(getattr(uploaded_file, "name", "") or "")
-    if Path(name).suffix.lower() not in {".xlsx", ".xls"}:
-        return []
-    workbook = None
-    try:
-        if hasattr(uploaded_file, "seek"):
-            uploaded_file.seek(0)
-        workbook = load_workbook(uploaded_file, read_only=True, data_only=True)
-        return list(workbook.sheetnames)
-    except Exception:
-        return []
-    finally:
-        if workbook is not None:
-            workbook.close()
-        if hasattr(uploaded_file, "seek"):
-            uploaded_file.seek(0)
+    name, payload = _uploaded_file_payload(uploaded_file)
+    return _cached_excel_sheet_names(name, payload)
 
 
 def _tokens(value: str) -> set[str]:
@@ -142,7 +239,7 @@ def _auto_sheet(sheet_names: Iterable[str], uploaded_name: str) -> str | None:
     return generic[0] if len(generic) == 1 else None
 
 
-def _required_field_frame(methodology_id: str) -> pd.DataFrame:
+def _build_required_field_frame(methodology_id: str) -> pd.DataFrame:
     formulas = load_formula_library("config/formula_library.csv")
     template = load_factor_template(methodology_id, templates_dir="templates")
     formula_ids = set(template["formula_id"].dropna().astype(str))
@@ -172,23 +269,121 @@ def _required_field_frame(methodology_id: str) -> pd.DataFrame:
     )
 
 
+@st.cache_data(show_spinner=False)
+def _required_field_frame(methodology_id: str) -> pd.DataFrame:
+    return _build_required_field_frame(methodology_id)
+
+
+@st.cache_data(show_spinner=False)
+def _cached_methodology_formula_ids(methodology_id: str) -> tuple[str, ...]:
+    template = load_factor_template(methodology_id, templates_dir="templates")
+    return tuple(sorted(set(template["formula_id"].dropna().astype(str).str.strip()) - {""}))
+
+
+def _has_source_value(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    try:
+        return not bool(pd.isna(value))
+    except (TypeError, ValueError):
+        return True
+
+
+def _workbook_direct_metric_overrides(methodology_id: str) -> Dict[str, Dict[str, Any]]:
+    formula_ids = set(_cached_methodology_formula_ids(methodology_id))
+    uploads = st.session_state.get("uploaded_issuer_data", {}) or {}
+    candidate_uploads = st.session_state.get("uploaded_source_candidates", {}) or {}
+    overrides: Dict[str, Dict[str, Any]] = {}
+    for upload_key, payload in uploads.items():
+        if not isinstance(payload, dict):
+            continue
+        if str(payload.get("source_name", "")).strip() != "CreditScope":
+            continue
+        workbook_data = payload.get("issuer_data", {}) or {}
+        if not isinstance(workbook_data, dict):
+            continue
+        source_name = str(payload.get("source_name") or upload_key)
+        file_name = str(payload.get("file_name") or "").strip()
+        source_used = f"{source_name}: {file_name}" if file_name else source_name
+        for field, value in workbook_data.items():
+            field_name = str(field).strip()
+            if field_name not in formula_ids or not _has_source_value(value):
+                continue
+            overrides[field_name] = {
+                "source_used": source_used,
+                "workbook_value": value,
+            }
+        candidates = candidate_uploads.get(upload_key)
+        if not isinstance(candidates, pd.DataFrame) or candidates.empty:
+            continue
+        for _, row in candidates.iterrows():
+            field_name = str(row.get("field_name", "") or "").strip()
+            value = row.get("value")
+            if field_name not in formula_ids or not _has_source_value(value):
+                continue
+            row_source = str(row.get("source_name") or row.get("canonical_source") or source_used).strip()
+            row_detail = str(row.get("source_cell_or_api") or row.get("source_detail") or "").strip()
+            overrides[field_name] = {
+                "source_used": f"{row_source}: {row_detail}" if row_detail else row_source,
+                "workbook_value": value,
+            }
+    return overrides
+
+
+def _direct_metric_debug_frame(
+    overrides: Dict[str, Dict[str, Any]],
+    issuer_data: Dict[str, Any],
+) -> pd.DataFrame:
+    rows = [
+        {
+            "field_name": field,
+            "source_used": item.get("source_used", "workbook_direct_metric"),
+            "workbook_value": item.get("workbook_value"),
+            "final_formula_input": issuer_data.get(field),
+        }
+        for field, item in sorted(overrides.items())
+    ]
+    return pd.DataFrame(rows, columns=["field_name", "source_used", "workbook_value", "final_formula_input"])
+
+
 def _manual_fields(required_fields: pd.DataFrame, source_report: pd.DataFrame | None) -> pd.DataFrame:
     manual_df = required_fields.copy()
     if isinstance(source_report, pd.DataFrame) and not source_report.empty and "field_name" in source_report.columns:
         selected = selected_source_report(source_report)
+        reported_fields = set(selected["field_name"].dropna().astype(str))
+        required_names = set(manual_df["field_name"].dropna().astype(str))
+        gap_fields = required_names - reported_fields
         if "readiness_status" in selected.columns:
-            gap_fields = set(
+            gap_fields.update(
                 selected[
                     selected["readiness_status"].astype(str).isin(["missing", "source_pending", "needs_review"])
                 ]["field_name"]
                 .dropna()
                 .astype(str)
             )
-            if gap_fields:
-                manual_df = manual_df[manual_df["field_name"].astype(str).isin(gap_fields)].copy()
+        if gap_fields:
+            manual_df = manual_df[manual_df["field_name"].astype(str).isin(gap_fields)].copy()
     manual_values = st.session_state.get("manual_source_values", {}) or {}
     manual_df["value"] = manual_df["field_name"].map(lambda field: "" if field not in manual_values else str(manual_values[field]))
     return manual_df[["field_name", "value", "used_by", "category"]]
+
+
+def _complete_required_field_frame(required_fields: pd.DataFrame, required_names: Iterable[str]) -> pd.DataFrame:
+    existing = set(required_fields["field_name"].dropna().astype(str)) if not required_fields.empty else set()
+    missing = sorted({str(field) for field in required_names if str(field)} - existing)
+    if not missing:
+        return required_fields
+    additions = pd.DataFrame(
+        [{"field_name": field, "used_by": "", "category": ""} for field in missing]
+    )
+    return (
+        pd.concat([required_fields, additions], ignore_index=True)
+        .drop_duplicates(subset=["field_name"], keep="first")
+        .sort_values("field_name")
+        .reset_index(drop=True)
+    )
 
 
 def _clean_manual_values(df: pd.DataFrame) -> Dict[str, Any]:
@@ -245,12 +440,13 @@ def render_source_workflow(methodology_id: str) -> None:
     st.session_state.setdefault("uploaded_sources", {})
     st.session_state.setdefault("uploaded_source_candidates", {})
     st.session_state.setdefault("uploaded_source_reports", {})
+    st.session_state.setdefault("uploaded_issuer_data", {})
     st.session_state.setdefault("api_source_candidates", {})
     st.session_state.setdefault("api_source_reports", {})
     st.session_state.setdefault("manual_source_values", {})
 
-    required_df = _required_field_frame(methodology_id)
-    required_names = required_fields_for_methodology(methodology_id)
+    required_names = list(_cached_required_names(methodology_id))
+    required_df = _complete_required_field_frame(_required_field_frame(methodology_id), required_names)
 
     notice = st.session_state.pop("source_reset_notice", None)
     if notice:
@@ -279,9 +475,10 @@ def render_source_workflow(methodology_id: str) -> None:
                 if uploaded is None:
                     continue
                 try:
+                    file_name, payload = _uploaded_file_payload(uploaded)
                     if source_name == "CreditScope":
-                        sheet_names = _excel_sheet_names(uploaded)
-                        selected_sheet = _auto_sheet(sheet_names, uploaded.name)
+                        sheet_names = _cached_excel_sheet_names(file_name, payload)
+                        selected_sheet = _auto_sheet(sheet_names, file_name)
                         if sheet_names and selected_sheet is None:
                             st.error(
                                 "No matching CreditScope raw worksheet found. Use this workbook for validation only, "
@@ -291,33 +488,32 @@ def render_source_workflow(methodology_id: str) -> None:
                             continue
                         if selected_sheet:
                             st.success(f"Auto-selected: {selected_sheet}")
-                        loader_output = load_creditscope_source_candidates(
-                            uploaded_file=uploaded,
-                            mapping_path="config/field_mapping.csv",
-                            row_mapping_path="config/creditscope_row_mapping.csv",
-                            sheet_name=selected_sheet,
-                            value_col=2,
-                            required_fields=required_names,
+                        loader_output = _cached_creditscope_mapping(
+                            file_name,
+                            payload,
+                            selected_sheet,
+                            tuple(required_names),
                         )
                         report = loader_output["match_report"]
                         candidates = loader_output["source_candidates"]
-                        mapped_count = len(loader_output["issuer_data"])
+                        source_data = dict(loader_output.get("issuer_data", {}) or {})
+                        mapped_count = len(source_data)
                     else:
-                        source_data, report = map_uploaded_file(
-                            uploaded_file=uploaded,
-                            source_name=source_name,
-                            mapping_path="config/field_mapping.csv",
-                        )
-                        candidates = mapping_report_to_source_candidates(report, uploaded_file=uploaded.name)
+                        source_data, report, candidates = _cached_mapped_upload(file_name, payload, source_name)
                         mapped_count = len(source_data)
                     if not report.empty and "uploaded_file" not in report.columns:
-                        report.insert(0, "uploaded_file", uploaded.name)
-                    st.session_state["uploaded_sources"][key] = uploaded.name
+                        report.insert(0, "uploaded_file", file_name)
+                    st.session_state["uploaded_sources"][key] = file_name
                     st.session_state["uploaded_source_candidates"][key] = candidates
                     st.session_state["uploaded_source_reports"][key] = report
+                    st.session_state["uploaded_issuer_data"][key] = {
+                        "source_name": source_name,
+                        "file_name": file_name,
+                        "issuer_data": source_data,
+                    }
                     st.success(f"{mapped_count} fields mapped")
                 except Exception as exc:
-                    st.error(f"Could not map {uploaded.name}.")
+                    st.error(f"Could not map {getattr(uploaded, 'name', 'uploaded file')}.")
                     st.exception(exc)
 
         upload_reports = [
@@ -343,12 +539,12 @@ def render_source_workflow(methodology_id: str) -> None:
             st.caption(f"{len(census_fields)} Census fields selected automatically.")
             if st.button("Fetch Census", key="api_fetch_census"):
                 try:
-                    census = fetch_census_source_candidates(
-                        state_fips=state_fips,
-                        county_fips=county_fips,
-                        year=int(census_year),
-                        fields=census_fields,
-                        include_proxy_fields=include_proxy,
+                    census = _cached_census_source_candidates(
+                        str(state_fips),
+                        str(county_fips),
+                        int(census_year),
+                        tuple(census_fields),
+                        bool(include_proxy),
                     )
                     st.session_state["api_source_candidates"]["census"] = census
                     st.session_state["api_source_reports"]["census"] = census
@@ -367,12 +563,12 @@ def render_source_workflow(methodology_id: str) -> None:
             st.caption(f"{len(bea_fields)} BEA fields selected automatically.")
             if st.button("Fetch BEA", key="api_fetch_bea"):
                 try:
-                    bea = fetch_bea_source_candidates(
-                        state_fips=bea_state,
-                        county_fips=bea_county,
-                        year=int(bea_year),
-                        prior_year=int(bea_prior),
-                        fields=bea_fields,
+                    bea = _cached_bea_source_candidates(
+                        str(bea_state),
+                        str(bea_county),
+                        int(bea_year),
+                        int(bea_prior),
+                        tuple(bea_fields),
                     )
                     st.session_state["api_source_candidates"]["bea"] = bea
                     st.session_state["api_source_reports"]["bea"] = bea
@@ -385,26 +581,29 @@ def render_source_workflow(methodology_id: str) -> None:
         st.markdown("**Manual / source-pending inputs**")
         st.caption("Only typed values are saved. Blank cells do not overwrite uploaded or API source data.")
         manual_base = _manual_fields(required_df, st.session_state.get("source_report"))
-        if manual_base.empty:
-            st.info("No manual/source-pending fields currently need input.")
-            edited_manual = manual_base
-        else:
-            edited_manual = st.data_editor(
-                manual_base,
-                width="stretch",
-                hide_index=True,
-                num_rows="fixed",
-                key=f"manual_source_editor_{methodology_id}",
-                column_config={
-                    "field_name": st.column_config.TextColumn("field_name", disabled=True),
-                    "value": st.column_config.TextColumn("value"),
-                    "used_by": st.column_config.TextColumn("used_by", disabled=True),
-                    "category": st.column_config.TextColumn("category", disabled=True),
-                },
-            )
+        with st.form(f"manual_source_form_{methodology_id}"):
+            if manual_base.empty:
+                st.info("No manual/source-pending fields currently need input.")
+                edited_manual = manual_base
+            else:
+                edited_manual = st.data_editor(
+                    manual_base,
+                    width="stretch",
+                    hide_index=True,
+                    num_rows="fixed",
+                    key=f"manual_source_editor_{methodology_id}",
+                    column_config={
+                        "field_name": st.column_config.TextColumn("field_name", disabled=True),
+                        "value": st.column_config.TextColumn("value"),
+                        "used_by": st.column_config.TextColumn("used_by", disabled=True),
+                        "category": st.column_config.TextColumn("category", disabled=True),
+                    },
+                )
+            save_sources = st.form_submit_button("Save issuer_data", type="primary")
 
-        if st.button("Save issuer_data", type="primary"):
-            manual_values = _clean_manual_values(edited_manual)
+        if save_sources:
+            manual_values = dict(st.session_state.get("manual_source_values", {}) or {})
+            manual_values.update(_clean_manual_values(edited_manual))
             st.session_state["manual_source_values"] = manual_values
             frames: list[pd.DataFrame] = []
             frames.extend(
@@ -429,10 +628,16 @@ def render_source_workflow(methodology_id: str) -> None:
                     methodology_id=methodology_id,
                     required_fields=required_names,
                 )
-                st.session_state["issuer_data"] = result["issuer_data"]
+                issuer_data = dict(result["issuer_data"])
+                direct_metric_overrides = _workbook_direct_metric_overrides(methodology_id)
+                for field, item in direct_metric_overrides.items():
+                    issuer_data[field] = item.get("workbook_value")
+                direct_metric_debug = _direct_metric_debug_frame(direct_metric_overrides, issuer_data)
+                st.session_state["issuer_data"] = issuer_data
                 st.session_state["source_report"] = result["source_report"]
                 st.session_state["source_candidates"] = result["source_candidates"]
                 st.session_state["source_readiness_summary"] = result["source_readiness_summary"]
+                st.session_state["workbook_direct_metric_debug"] = direct_metric_debug
                 reports = []
                 reports.extend(st.session_state.get("uploaded_source_reports", {}).values())
                 reports.extend(st.session_state.get("api_source_reports", {}).values())
@@ -441,7 +646,10 @@ def render_source_workflow(methodology_id: str) -> None:
                         [r for r in reports if isinstance(r, pd.DataFrame) and not r.empty],
                         ignore_index=True,
                     )
-                st.success(f"Saved issuer_data with {len(result['issuer_data'])} selected fields.")
+                st.success(f"Saved issuer_data with {len(issuer_data)} selected fields.")
+                if not direct_metric_debug.empty:
+                    with st.expander("Workbook direct metric debug", expanded=True):
+                        st.dataframe(clean_for_display(direct_metric_debug), width="stretch", hide_index=True)
 
     with st.container(border=True):
         st.markdown("**Source readiness**")
