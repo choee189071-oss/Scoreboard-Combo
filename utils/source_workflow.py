@@ -41,6 +41,8 @@ SOURCE_SESSION_KEYS = {
     "workbook_direct_metric_debug",
 }
 
+SOURCE_WORKFLOW_CACHE_VERSION = "direct-metrics-cache-v2"
+
 
 def _uploaded_file_payload(uploaded_file: Any) -> tuple[str, bytes]:
     name = str(getattr(uploaded_file, "name", "") or "uploaded_file")
@@ -89,6 +91,7 @@ def _cached_creditscope_mapping(
     payload: bytes,
     sheet_name: str | None,
     required_fields: tuple[str, ...],
+    cache_version: str,
 ) -> Dict[str, Any]:
     return load_creditscope_source_candidates(
         uploaded_file=_upload_buffer(file_name, payload),
@@ -522,6 +525,7 @@ def render_source_workflow(methodology_id: str) -> None:
                             payload,
                             selected_sheet,
                             tuple(required_names),
+                            SOURCE_WORKFLOW_CACHE_VERSION,
                         )
                         report = loader_output["match_report"]
                         candidates = loader_output["source_candidates"]
