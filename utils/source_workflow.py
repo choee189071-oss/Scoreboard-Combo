@@ -502,6 +502,7 @@ def render_source_workflow(methodology_id: str) -> None:
                 "label": "CreditScope raw workbook",
                 "types": ["csv", "xlsx", "xls"],
                 "caption": "CSV/XLSX/XLS up to 200MB per file.",
+                "multiple": False,
             },
             {
                 "key": "ipeds",
@@ -509,20 +510,23 @@ def render_source_workflow(methodology_id: str) -> None:
                 "label": "IPEDS Excel",
                 "types": ["csv", "xlsx", "xls"],
                 "caption": "CSV/XLSX/XLS up to 200MB per file.",
+                "multiple": False,
             },
             {
                 "key": "os",
                 "source_name": "OS",
                 "label": "Official Statement / debt support",
                 "types": ["pdf", "csv", "xlsx", "xls"],
-                "caption": "PDF/CSV/XLSX/XLS up to 200MB per file. PDFs are registered for Source QA.",
+                "caption": "Upload one or more PDF/CSV/XLSX/XLS files. PDFs are registered for Source QA.",
+                "multiple": True,
             },
             {
                 "key": "acfr",
                 "source_name": "ACFR",
                 "label": "ACFR / Audit extract",
                 "types": ["pdf", "csv", "xlsx", "xls"],
-                "caption": "PDF/CSV/XLSX/XLS up to 200MB per file. PDFs are registered for Source QA.",
+                "caption": "Upload one or more PDF/CSV/XLSX/XLS files. PDFs are registered for Source QA.",
+                "multiple": True,
             },
         ]
         for row_start in range(0, len(source_options), 2):
@@ -537,62 +541,84 @@ def render_source_workflow(methodology_id: str) -> None:
                         type=option["types"],
                         key=f"upload_{key}",
                         help=option["caption"],
+                        accept_multiple_files=bool(option.get("multiple", False)),
                     )
                     st.caption(option["caption"])
-                    if uploaded is None:
+                    uploaded_files = uploaded if isinstance(uploaded, list) else ([uploaded] if uploaded is not None else [])
+                    if not uploaded_files:
                         continue
                     try:
-                        file_name, payload = _uploaded_file_payload(uploaded)
-                        if Path(file_name).suffix.lower() == ".pdf":
-                            st.session_state["uploaded_sources"][key] = file_name
-                            st.session_state["uploaded_source_candidates"][key] = pd.DataFrame()
-                            st.session_state["uploaded_source_reports"][key] = pd.DataFrame()
-                            st.session_state["uploaded_issuer_data"][key] = {
-                                "source_name": source_name,
-                                "file_name": file_name,
-                                "issuer_data": {},
-                            }
-                            st.success("PDF registered for Source QA")
-                            continue
-                        if source_name == "CreditScope":
-                            sheet_names = _cached_excel_sheet_names(file_name, payload)
-                            selected_sheet = _auto_sheet(sheet_names, file_name)
-                            if sheet_names and selected_sheet is None:
-                                st.error(
-                                    "No matching CreditScope raw worksheet found. Use this workbook for validation only, "
-                                    "or upload a raw workbook whose FIN/raw sheet matches the issuer."
-                                )
-                                st.caption(f"Detected worksheets: {', '.join(sheet_names)}")
+                        file_names: list[str] = []
+                        source_data: dict[str, Any] = {}
+                        report_frames: list[pd.DataFrame] = []
+                        candidate_frames: list[pd.DataFrame] = []
+                        pdf_count = 0
+
+                        for uploaded_file in uploaded_files:
+                            file_name, payload = _uploaded_file_payload(uploaded_file)
+                            file_names.append(file_name)
+                            if Path(file_name).suffix.lower() == ".pdf":
+                                pdf_count += 1
                                 continue
-                            if selected_sheet:
-                                st.success(f"Auto-selected: {selected_sheet}")
-                            loader_output = _cached_creditscope_mapping(
-                                file_name,
-                                payload,
-                                selected_sheet,
-                                tuple(required_names),
-                                SOURCE_WORKFLOW_CACHE_VERSION,
-                            )
-                            report = loader_output["match_report"]
-                            candidates = loader_output["source_candidates"]
-                            source_data = dict(loader_output.get("issuer_data", {}) or {})
-                            mapped_count = len(source_data)
-                        else:
-                            source_data, report, candidates = _cached_mapped_upload(file_name, payload, source_name)
-                            mapped_count = len(source_data)
-                        if not report.empty and "uploaded_file" not in report.columns:
-                            report.insert(0, "uploaded_file", file_name)
-                        st.session_state["uploaded_sources"][key] = file_name
+
+                            if source_name == "CreditScope":
+                                sheet_names = _cached_excel_sheet_names(file_name, payload)
+                                selected_sheet = _auto_sheet(sheet_names, file_name)
+                                if sheet_names and selected_sheet is None:
+                                    st.error(
+                                        "No matching CreditScope raw worksheet found. Use this workbook for validation only, "
+                                        "or upload a raw workbook whose FIN/raw sheet matches the issuer."
+                                    )
+                                    st.caption(f"Detected worksheets: {', '.join(sheet_names)}")
+                                    continue
+                                if selected_sheet:
+                                    st.success(f"Auto-selected: {selected_sheet}")
+                                loader_output = _cached_creditscope_mapping(
+                                    file_name,
+                                    payload,
+                                    selected_sheet,
+                                    tuple(required_names),
+                                    SOURCE_WORKFLOW_CACHE_VERSION,
+                                )
+                                report = loader_output["match_report"]
+                                candidates = loader_output["source_candidates"]
+                                mapped_data = dict(loader_output.get("issuer_data", {}) or {})
+                            else:
+                                mapped_data, report, candidates = _cached_mapped_upload(file_name, payload, source_name)
+
+                            source_data.update(mapped_data)
+                            if not report.empty and "uploaded_file" not in report.columns:
+                                report.insert(0, "uploaded_file", file_name)
+                            if isinstance(report, pd.DataFrame) and not report.empty:
+                                report_frames.append(report)
+                            if isinstance(candidates, pd.DataFrame) and not candidates.empty:
+                                candidate_frames.append(candidates)
+
+                        report = pd.concat(report_frames, ignore_index=True) if report_frames else pd.DataFrame()
+                        candidates = (
+                            pd.concat(candidate_frames, ignore_index=True)
+                            if candidate_frames
+                            else pd.DataFrame()
+                        )
+                        file_label = "; ".join(file_names)
+                        st.session_state["uploaded_sources"][key] = file_label
                         st.session_state["uploaded_source_candidates"][key] = candidates
                         st.session_state["uploaded_source_reports"][key] = report
                         st.session_state["uploaded_issuer_data"][key] = {
                             "source_name": source_name,
-                            "file_name": file_name,
+                            "file_name": file_label,
                             "issuer_data": source_data,
                         }
-                        st.success(f"{mapped_count} fields mapped")
+                        if source_data and pdf_count:
+                            st.success(f"{len(source_data)} fields mapped; {pdf_count} PDF file(s) registered for Source QA.")
+                        elif source_data:
+                            st.success(f"{len(source_data)} fields mapped across {len(file_names)} file(s).")
+                        elif pdf_count:
+                            st.success(f"{pdf_count} PDF file(s) registered for Source QA.")
+                        else:
+                            st.info("Files uploaded, but no mappable fields were found.")
                     except Exception as exc:
-                        st.error(f"Could not map {getattr(uploaded, 'name', 'uploaded file')}.")
+                        st.error("Could not map uploaded file(s).")
                         st.exception(exc)
 
         upload_reports = [
