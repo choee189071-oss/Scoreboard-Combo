@@ -231,16 +231,27 @@ def data_confirmation_export() -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _render_human_workflow_cards() -> None:
+    for item in HUMAN_WORKFLOW_STEPS:
+        with st.container(border=True):
+            st.markdown(f"**{item['step']}**")
+            st.markdown(f"**Human action:** {item['human_action']}")
+            st.markdown(f"**System action:** {item['system_action']}")
+            st.markdown(f"**Decision output:** {item['decision_output']}")
+
+
 def render_data_confirmation_workflow(methodology_id: str) -> None:
     st.caption("Source QA keeps workbook values, independent documents, AI review, and human approval separate.")
 
     tabs = st.tabs(["Human workflow", "File registry", "Field checklist", "Approval rules"])
     with tabs[0]:
-        st.dataframe(
-            clean_for_display(_frame(HUMAN_WORKFLOW_STEPS)),
-            width="stretch",
-            hide_index=True,
-        )
+        _render_human_workflow_cards()
+        with st.expander("View workflow as table", expanded=False):
+            st.dataframe(
+                clean_for_display(_frame(HUMAN_WORKFLOW_STEPS)),
+                width="stretch",
+                hide_index=True,
+            )
     with tabs[1]:
         current_registry = _current_source_registry()
         if not current_registry.empty:
