@@ -255,6 +255,11 @@ with st.container(border=True):
     st.markdown("**1. Source Data**")
     render_source_workflow(methodology_id)
 
+issuer_data = st.session_state.get("issuer_data", {}) or {}
+formula_results = st.session_state.get("methodology_formula_results")
+if not isinstance(formula_results, pd.DataFrame) or formula_results.empty:
+    formula_results = st.session_state.get("formula_results")
+
 with st.container(border=True):
     st.markdown("**2. Formula Calculation**")
     if issuer_data and st.button("Run formulas from current issuer_data", type="primary"):

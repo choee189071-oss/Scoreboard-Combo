@@ -348,6 +348,14 @@ def _direct_metric_debug_frame(
     return pd.DataFrame(rows, columns=["field_name", "source_used", "workbook_value", "final_formula_input"])
 
 
+def _clear_formula_rating_outputs() -> None:
+    for key in ["formula_results", "methodology_formula_results", "rating_output"]:
+        st.session_state.pop(key, None)
+    st.session_state["formula_results"] = pd.DataFrame()
+    st.session_state["methodology_formula_results"] = pd.DataFrame()
+    st.session_state["rating_output"] = None
+
+
 def _manual_fields(required_fields: pd.DataFrame, source_report: pd.DataFrame | None) -> pd.DataFrame:
     manual_df = required_fields.copy()
     if isinstance(source_report, pd.DataFrame) and not source_report.empty and "field_name" in source_report.columns:
@@ -576,6 +584,38 @@ def render_source_workflow(methodology_id: str) -> None:
                 except BeaApiError as exc:
                     st.error("Could not fetch BEA data.")
                     st.exception(exc)
+        if st.button("Fetch Census + BEA", key="api_fetch_all", type="primary"):
+            fetched: list[str] = []
+            try:
+                census = _cached_census_source_candidates(
+                    str(state_fips),
+                    str(county_fips),
+                    int(census_year),
+                    tuple(census_fields),
+                    bool(include_proxy),
+                )
+                st.session_state["api_source_candidates"]["census"] = census
+                st.session_state["api_source_reports"]["census"] = census
+                fetched.append(f"{len(census)} Census")
+            except CensusApiError as exc:
+                st.error("Could not fetch Census ACS data.")
+                st.exception(exc)
+            try:
+                bea = _cached_bea_source_candidates(
+                    str(bea_state),
+                    str(bea_county),
+                    int(bea_year),
+                    int(bea_prior),
+                    tuple(bea_fields),
+                )
+                st.session_state["api_source_candidates"]["bea"] = bea
+                st.session_state["api_source_reports"]["bea"] = bea
+                fetched.append(f"{len(bea)} BEA")
+            except BeaApiError as exc:
+                st.error("Could not fetch BEA data.")
+                st.exception(exc)
+            if fetched:
+                st.success(f"Fetched {' and '.join(fetched)} candidate fields.")
 
     with st.container(border=True):
         st.markdown("**Manual / source-pending inputs**")
@@ -638,6 +678,7 @@ def render_source_workflow(methodology_id: str) -> None:
                 st.session_state["source_candidates"] = result["source_candidates"]
                 st.session_state["source_readiness_summary"] = result["source_readiness_summary"]
                 st.session_state["workbook_direct_metric_debug"] = direct_metric_debug
+                _clear_formula_rating_outputs()
                 reports = []
                 reports.extend(st.session_state.get("uploaded_source_reports", {}).values())
                 reports.extend(st.session_state.get("api_source_reports", {}).values())
