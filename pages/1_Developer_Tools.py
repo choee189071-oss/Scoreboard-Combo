@@ -20,6 +20,7 @@ from engine.rating_audit import (
     build_rating_audit_trail,
 )
 from engine.rating_engine import summarize_rating_output
+from utils.data_confirmation import data_confirmation_export
 from utils.ui_helpers import clean_for_display, current_context_card, init_state, page_header
 
 
@@ -50,7 +51,7 @@ source_report = st.session_state.get("source_report", pd.DataFrame())
 formula_results = st.session_state.get("formula_results", pd.DataFrame())
 rating_output = st.session_state.get("rating_output")
 
-tabs = st.tabs(["Methodology Audit", "Session Export", "Session State"])
+tabs = st.tabs(["Methodology Audit", "Session Export", "Data Confirmation", "Session State"])
 
 with tabs[0]:
     st.subheader("Structural Audit")
@@ -174,6 +175,12 @@ with tabs[1]:
             st.info("No rating_output saved.")
 
 with tabs[2]:
+    st.subheader("Data Confirmation Plan")
+    plan_df = data_confirmation_export()
+    st.dataframe(clean_for_display(plan_df), width="stretch", hide_index=True)
+    _download_dataframe("Download data_confirmation_plan.csv", plan_df, "data_confirmation_plan.csv")
+
+with tabs[3]:
     st.subheader("Current Session Preview")
     if issuer_data:
         with st.expander("issuer_data", expanded=False):
