@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, Iterable, List
 
 import pandas as pd
@@ -195,25 +196,553 @@ APPROVAL_STATUS_RULES: List[Dict[str, str]] = [
 ]
 
 
+WEST_SACRAMENTO_SOURCE_MAP: List[Dict[str, str]] = [
+    {
+        "fiscal_year": "2024",
+        "document_type": "ACFR",
+        "pdf_page": "49",
+        "report_page": "27",
+        "section": "Balance Sheet - Governmental Funds",
+        "confirms": "committed_fund_balance; assigned_fund_balance; unassigned_fund_balance; fund balance",
+        "review_focus": "Use governmental funds. Confirm restricted/nonspendable treatment before reserve ratio approval.",
+    },
+    {
+        "fiscal_year": "2024",
+        "document_type": "ACFR",
+        "pdf_page": "50",
+        "report_page": "28",
+        "section": "Reconciliation to Statement of Net Position",
+        "confirms": "net_pension_liability; net_opeb_liability; long-term liabilities",
+        "review_focus": "Use governmental activities values and confirm units are dollars.",
+    },
+    {
+        "fiscal_year": "2024",
+        "document_type": "ACFR",
+        "pdf_page": "51",
+        "report_page": "29",
+        "section": "Statement of Revenues, Expenditures, and Changes in Fund Balances",
+        "confirms": "governmental_revenue; governmental_expense; operating_transfers; debt_service",
+        "review_focus": "Use total governmental funds or agreed analytical fund scope consistently across years.",
+    },
+    {
+        "fiscal_year": "2023",
+        "document_type": "ACFR",
+        "pdf_page": "49-50",
+        "report_page": "28",
+        "section": "Balance Sheet - Governmental Funds",
+        "confirms": "committed_fund_balance; assigned_fund_balance; unassigned_fund_balance; fund balance",
+        "review_focus": "Second observation for three-year reserve calculation.",
+    },
+    {
+        "fiscal_year": "2023",
+        "document_type": "ACFR",
+        "pdf_page": "52",
+        "report_page": "30",
+        "section": "Reconciliation to Statement of Net Position",
+        "confirms": "net_pension_liability; net_opeb_liability; long-term liabilities",
+        "review_focus": "Supports pension and OPEB check; do not mix business-type activities into governmental metrics.",
+    },
+    {
+        "fiscal_year": "2023",
+        "document_type": "ACFR",
+        "pdf_page": "53-54",
+        "report_page": "31-32",
+        "section": "Statement of Revenues, Expenditures, and Changes in Fund Balances",
+        "confirms": "governmental_revenue; governmental_expense; operating_transfers; debt_service",
+        "review_focus": "Second observation for three-year operating-result calculation.",
+    },
+    {
+        "fiscal_year": "2023",
+        "document_type": "ACFR",
+        "pdf_page": "88+",
+        "report_page": "66+",
+        "section": "Pension Plans note",
+        "confirms": "net_pension_liability; pension cost context",
+        "review_focus": "Use as support when reconciliation value needs note-level confirmation.",
+    },
+    {
+        "fiscal_year": "2023",
+        "document_type": "ACFR",
+        "pdf_page": "108+",
+        "report_page": "86+",
+        "section": "Debt service schedule / long-term debt note",
+        "confirms": "debt service; long-term debt; maturity schedule",
+        "review_focus": "Supports debt service flow; may not equal S&P net direct debt adjustments.",
+    },
+    {
+        "fiscal_year": "2022",
+        "document_type": "ACFR",
+        "pdf_page": "47",
+        "report_page": "24",
+        "section": "Balance Sheet - Governmental Funds",
+        "confirms": "committed_fund_balance; assigned_fund_balance; unassigned_fund_balance; fund balance",
+        "review_focus": "Secured PDF; use rendered page evidence if text extraction is blocked.",
+    },
+    {
+        "fiscal_year": "2022",
+        "document_type": "ACFR",
+        "pdf_page": "48",
+        "report_page": "25",
+        "section": "Reconciliation to Statement of Net Position",
+        "confirms": "net_pension_liability; net_opeb_liability; long-term liabilities",
+        "review_focus": "Secured PDF; verify visually against the rendered page.",
+    },
+    {
+        "fiscal_year": "2022",
+        "document_type": "ACFR",
+        "pdf_page": "49",
+        "report_page": "26",
+        "section": "Statement of Revenues, Expenditures, and Changes in Fund Balances",
+        "confirms": "governmental_revenue; governmental_expense; operating_transfers; debt_service",
+        "review_focus": "Third observation for three-year operating-result calculation.",
+    },
+    {
+        "fiscal_year": "2022",
+        "document_type": "ACFR",
+        "pdf_page": "87-101",
+        "report_page": "64-78",
+        "section": "Long-term liabilities / pension / OPEB notes",
+        "confirms": "net_pension_liability; net_opeb_liability; debt context",
+        "review_focus": "Use only cited line items; secured PDF text may be unreliable.",
+    },
+    {
+        "fiscal_year": "2022",
+        "document_type": "Debt support",
+        "pdf_page": "239-276",
+        "report_page": "",
+        "section": "West Sacramento Financing Authority refunding packet",
+        "confirms": "refunding amount; final maturity; debt service flow; reserve mechanics",
+        "review_focus": "Supporting evidence only; not a complete official statement for net direct debt.",
+    },
+]
+
+FIELD_TOLERANCES: Dict[str, float] = {
+    "gdp_per_capita_ratio": 0.005,
+    "personal_income_ratio": 0.005,
+    "gov_operating_margin_3yr_avg": 0.0025,
+    "available_fund_balance_ratio_3yr_avg": 0.0025,
+    "fixed_cost_burden_ratio": 0.0025,
+    "net_direct_debt_per_capita": 1.0,
+    "npl_per_capita": 1.0,
+}
+
+APPROVAL_DECISIONS = [
+    "Needs review",
+    "Accept CreditScope",
+    "Accept independent source",
+    "Manual override",
+    "Exclude source",
+]
+
+
 def _frame(rows: Iterable[Dict[str, Any]]) -> pd.DataFrame:
     return pd.DataFrame(list(rows))
+
+
+def _split_file_names(value: Any) -> list[str]:
+    if isinstance(value, list):
+        raw = value
+    else:
+        raw = str(value or "").split(";")
+    return [str(item).strip() for item in raw if str(item).strip()]
+
+
+def _detect_fiscal_year(file_name: str) -> str:
+    lower = file_name.lower()
+    if "4124" in lower:
+        return "2023"
+    match = re.search(r"(20[0-9]{2})", lower)
+    if match:
+        year = match.group(1)
+        if year in {"2022", "2023", "2024", "2025"}:
+            return year
+    return ""
+
+
+def _classify_file(source_slot: str, file_name: str, issuer_name: str) -> dict[str, Any]:
+    lower = file_name.lower()
+    issuer_lower = str(issuer_name or "").lower()
+    issuer_mismatch = "city of sacramento" in lower or ("sacramento" in lower and "west sacramento" not in lower and "west_sacramento" not in lower)
+    if issuer_mismatch and "west sacramento" in issuer_lower:
+        include_status = "exclude"
+        reason = "Issuer mismatch: document appears to be City of Sacramento, not City of West Sacramento."
+    else:
+        include_status = "include"
+        reason = "Issuer match or needs human confirmation."
+
+    if source_slot == "creditscope":
+        doc_type = "CreditScope workbook"
+    elif source_slot == "acfr" or "acfr" in lower or "annual comprehensive financial report" in lower:
+        doc_type = "ACFR"
+    elif source_slot == "os":
+        doc_type = "Debt support / official statement"
+    elif source_slot == "ipeds":
+        doc_type = "IPEDS"
+    else:
+        doc_type = "Source document"
+
+    return {
+        "source_slot": source_slot,
+        "file_name": file_name,
+        "document_type": doc_type,
+        "fiscal_year": _detect_fiscal_year(file_name),
+        "include_status": include_status,
+        "review_reason": reason,
+        "next_review": "Confirm issuer, fiscal year, and whether this document supports current deal fields.",
+    }
 
 
 def _current_source_registry() -> pd.DataFrame:
     uploaded = st.session_state.get("uploaded_sources", {}) or {}
     rows: list[dict[str, Any]] = []
-    for source_key, file_name in uploaded.items():
-        if not file_name:
+    issuer_name = st.session_state.get("issuer_name", "")
+    for source_key, file_names in uploaded.items():
+        for file_name in _split_file_names(file_names):
+            rows.append(_classify_file(source_key, file_name, issuer_name))
+    return pd.DataFrame(rows)
+
+
+def _source_map_frame(registry: pd.DataFrame) -> pd.DataFrame:
+    if not isinstance(registry, pd.DataFrame) or registry.empty:
+        return pd.DataFrame(WEST_SACRAMENTO_SOURCE_MAP)
+    years = set(registry["fiscal_year"].dropna().astype(str)) - {""}
+    doc_types = set(registry["document_type"].dropna().astype(str))
+    rows = []
+    for item in WEST_SACRAMENTO_SOURCE_MAP:
+        if years and item["fiscal_year"] not in years:
+            continue
+        if item["document_type"] == "Debt support" and not any("Debt" in doc for doc in doc_types):
+            continue
+        rows.append(item)
+    return pd.DataFrame(rows or WEST_SACRAMENTO_SOURCE_MAP)
+
+
+def _selected_source_lookup() -> dict[str, str]:
+    source_report = st.session_state.get("source_report", pd.DataFrame())
+    if not isinstance(source_report, pd.DataFrame) or source_report.empty:
+        return {}
+    selected = source_report
+    if "selected" in selected.columns:
+        selected = selected[selected["selected"].astype(bool)].copy()
+    lookup: dict[str, str] = {}
+    for _, row in selected.iterrows():
+        field = str(row.get("field_name", "") or "").strip()
+        if not field:
+            continue
+        source = str(row.get("source_name") or row.get("canonical_source") or "").strip()
+        detail = str(row.get("source_cell_or_api") or row.get("source_detail") or "").strip()
+        lookup[field] = f"{source}: {detail}" if detail else source
+    return lookup
+
+
+def _formula_value_lookup() -> dict[str, Any]:
+    formula_results = st.session_state.get("methodology_formula_results")
+    if not isinstance(formula_results, pd.DataFrame) or formula_results.empty:
+        formula_results = st.session_state.get("formula_results", pd.DataFrame())
+    if not isinstance(formula_results, pd.DataFrame) or formula_results.empty or "formula_id" not in formula_results.columns:
+        return {}
+    values: dict[str, Any] = {}
+    for _, row in formula_results.iterrows():
+        formula_id = str(row.get("formula_id", "") or "").strip()
+        if formula_id:
+            values[formula_id] = row.get("value")
+    return values
+
+
+def _selected_value(field: str, formula_values: dict[str, Any]) -> Any:
+    issuer_data = st.session_state.get("issuer_data", {}) or {}
+    if field in formula_values:
+        return formula_values[field]
+    return issuer_data.get(field)
+
+
+def _base_check_rows(methodology_id: str) -> list[dict[str, Any]]:
+    checklist = SP_LOCAL_GOV_FIELD_CHECKLIST if methodology_id == "sp_local_gov_k12" else []
+    formula_values = _formula_value_lookup()
+    source_lookup = _selected_source_lookup()
+    rows: list[dict[str, Any]] = []
+    for item in checklist:
+        field = item["field_or_metric"]
+        if " / " in field:
             continue
         rows.append(
             {
-                "source_slot": source_key,
-                "file_name": file_name,
-                "registry_status": "uploaded",
-                "next_review": "Classify issuer, fiscal year, document type, and include/exclude status.",
+                "factor": item["factor"],
+                "field_or_metric": field,
+                "selected_value": _selected_value(field, formula_values),
+                "selected_source": source_lookup.get(field, "Formula / current issuer_data"),
+                "independent_value": "",
+                "independent_source": "",
+                "citation": "",
+                "review_note": "",
             }
         )
+    return rows
+
+
+def _parse_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, str) and not value.strip():
+        return None
+    try:
+        return float(str(value).replace(",", "").replace("$", "").replace("%", ""))
+    except (TypeError, ValueError):
+        return None
+
+
+def _comparison_status(field: str, selected_value: Any, independent_value: Any) -> tuple[str, Any, Any]:
+    selected = _parse_float(selected_value)
+    independent = _parse_float(independent_value)
+    if independent is None:
+        return "missing_source", "", ""
+    if selected is None:
+        return "source_pending", "", ""
+    diff = independent - selected
+    abs_diff = abs(diff)
+    tolerance = FIELD_TOLERANCES.get(field, max(abs(selected) * 0.01, 0.01))
+    if abs_diff <= tolerance:
+        status = "matched"
+    elif abs_diff <= max(tolerance * 3, abs(selected) * 0.02):
+        status = "minor_difference"
+    else:
+        status = "material_difference"
+    return status, diff, abs_diff
+
+
+def _confirmation_checks(methodology_id: str) -> pd.DataFrame:
+    saved = st.session_state.get("data_confirmation_checks")
+    base = pd.DataFrame(_base_check_rows(methodology_id))
+    if isinstance(saved, pd.DataFrame) and not saved.empty:
+        editable_cols = ["field_or_metric", "independent_value", "independent_source", "citation", "review_note"]
+        saved_editable = saved[[col for col in editable_cols if col in saved.columns]].copy()
+        base = base.drop(columns=[col for col in ["independent_value", "independent_source", "citation", "review_note"] if col in base.columns])
+        base = base.merge(saved_editable, on="field_or_metric", how="left")
+    for col in ["independent_value", "independent_source", "citation", "review_note"]:
+        if col not in base.columns:
+            base[col] = ""
+        base[col] = base[col].fillna("")
+    return base
+
+
+def _comparison_frame(methodology_id: str) -> pd.DataFrame:
+    checks = _confirmation_checks(methodology_id).copy()
+    if checks.empty:
+        return checks
+    rows = []
+    for _, row in checks.iterrows():
+        status, diff, abs_diff = _comparison_status(
+            str(row.get("field_or_metric", "")),
+            row.get("selected_value"),
+            row.get("independent_value"),
+        )
+        item = row.to_dict()
+        item.update(
+            {
+                "difference": diff,
+                "absolute_difference": abs_diff,
+                "qa_status": status,
+            }
+        )
+        rows.append(item)
     return pd.DataFrame(rows)
+
+
+def _save_confirmation_checks(edited: pd.DataFrame) -> None:
+    st.session_state["data_confirmation_checks"] = edited.copy()
+
+
+def _render_step_1_context() -> None:
+    cols = st.columns(3)
+    cols[0].metric("Issuer", st.session_state.get("issuer_name") or "Not set")
+    cols[1].metric("Methodology", st.session_state.get("methodology_id") or "Not set")
+    cols[2].metric("Fiscal Year", st.session_state.get("analysis_year") or "Not set")
+
+
+def _render_step_2_file_registry() -> pd.DataFrame:
+    registry = _current_source_registry()
+    if registry.empty:
+        st.info("No source files uploaded yet. Use Source Data below to upload CreditScope, ACFR, and debt support files.")
+    else:
+        st.dataframe(clean_for_display(registry), width="stretch", hide_index=True)
+    return registry
+
+
+def _render_step_3_source_map(registry: pd.DataFrame) -> None:
+    source_map = _source_map_frame(registry)
+    st.dataframe(clean_for_display(source_map), width="stretch", hide_index=True)
+
+
+def _render_step_4_candidates(methodology_id: str) -> None:
+    checks = _confirmation_checks(methodology_id)
+    if checks.empty:
+        st.info("This methodology does not have a source-QA checklist yet.")
+        return
+    editable_cols = [
+        "factor",
+        "field_or_metric",
+        "selected_value",
+        "selected_source",
+        "independent_value",
+        "independent_source",
+        "citation",
+        "review_note",
+    ]
+    with st.form("data_confirmation_candidate_form"):
+        edited = st.data_editor(
+            clean_for_display(checks[[col for col in editable_cols if col in checks.columns]]),
+            width="stretch",
+            hide_index=True,
+            num_rows="fixed",
+            key="data_confirmation_candidate_editor",
+            column_config={
+                "factor": st.column_config.TextColumn("factor", disabled=True),
+                "field_or_metric": st.column_config.TextColumn("field_or_metric", disabled=True),
+                "selected_value": st.column_config.TextColumn("selected_value", disabled=True),
+                "selected_source": st.column_config.TextColumn("selected_source", disabled=True),
+                "independent_value": st.column_config.TextColumn("independent_value"),
+                "independent_source": st.column_config.TextColumn("independent_source"),
+                "citation": st.column_config.TextColumn("citation"),
+                "review_note": st.column_config.TextColumn("review_note"),
+            },
+        )
+        if st.form_submit_button("Save independent source candidates", type="primary"):
+            _save_confirmation_checks(edited)
+            st.success("Independent source candidates saved.")
+
+
+def _render_step_5_comparison(methodology_id: str) -> pd.DataFrame:
+    comparison = _comparison_frame(methodology_id)
+    if comparison.empty:
+        st.info("No comparison rows available yet.")
+        return comparison
+    cols = st.columns(4)
+    counts = comparison["qa_status"].value_counts().to_dict()
+    cols[0].metric("Matched", int(counts.get("matched", 0)))
+    cols[1].metric("Minor", int(counts.get("minor_difference", 0)))
+    cols[2].metric("Material", int(counts.get("material_difference", 0)))
+    cols[3].metric("Missing source", int(counts.get("missing_source", 0)))
+    show_cols = [
+        "factor",
+        "field_or_metric",
+        "selected_value",
+        "independent_value",
+        "difference",
+        "absolute_difference",
+        "qa_status",
+        "citation",
+    ]
+    st.dataframe(clean_for_display(comparison[[col for col in show_cols if col in comparison.columns]]), width="stretch", hide_index=True)
+    st.session_state["data_confirmation_comparison"] = comparison
+    return comparison
+
+
+def _review_prompt(row: pd.Series) -> str:
+    return (
+        "Review this source QA item using only the cited page/table evidence.\n\n"
+        f"Field: {row.get('field_or_metric', '')}\n"
+        f"Factor: {row.get('factor', '')}\n"
+        f"Current selected value: {row.get('selected_value', '')}\n"
+        f"Selected source: {row.get('selected_source', '')}\n"
+        f"Independent candidate value: {row.get('independent_value', '')}\n"
+        f"Independent source: {row.get('independent_source', '')}\n"
+        f"Citation: {row.get('citation', '')}\n"
+        f"Current QA status: {row.get('qa_status', '')}\n\n"
+        "Confirm whether the independent source line item supports this field, explain any mismatch, "
+        "and assign confidence as high / medium / low."
+    )
+
+
+def _render_step_6_ai_review(comparison: pd.DataFrame) -> None:
+    if not isinstance(comparison, pd.DataFrame) or comparison.empty:
+        st.info("Run comparison first, then generate a bounded AI review prompt.")
+        return
+    options = comparison["field_or_metric"].dropna().astype(str).tolist()
+    selected = st.selectbox("Select field for bounded AI review prompt", options, key="data_confirmation_review_field")
+    row = comparison[comparison["field_or_metric"].astype(str).eq(selected)].iloc[0]
+    st.text_area("Review prompt", value=_review_prompt(row), height=230)
+
+
+def _render_step_7_approval(comparison: pd.DataFrame) -> pd.DataFrame:
+    if not isinstance(comparison, pd.DataFrame) or comparison.empty:
+        st.info("No comparison rows to approve yet.")
+        return pd.DataFrame()
+    saved = st.session_state.get("data_confirmation_approvals")
+    approvals = comparison.copy()
+    if isinstance(saved, pd.DataFrame) and not saved.empty:
+        saved_cols = ["field_or_metric", "approval_decision", "approved_value", "approval_note"]
+        approvals = approvals.merge(saved[[col for col in saved_cols if col in saved.columns]], on="field_or_metric", how="left")
+    for col in ["approval_decision", "approved_value", "approval_note"]:
+        if col not in approvals.columns:
+            approvals[col] = ""
+        approvals[col] = approvals[col].fillna("")
+    approvals["approval_decision"] = approvals["approval_decision"].replace("", "Needs review")
+
+    with st.form("data_confirmation_approval_form"):
+        edited = st.data_editor(
+            clean_for_display(
+                approvals[
+                    [
+                        "factor",
+                        "field_or_metric",
+                        "selected_value",
+                        "independent_value",
+                        "qa_status",
+                        "approval_decision",
+                        "approved_value",
+                        "approval_note",
+                    ]
+                ]
+            ),
+            width="stretch",
+            hide_index=True,
+            num_rows="fixed",
+            key="data_confirmation_approval_editor",
+            column_config={
+                "factor": st.column_config.TextColumn("factor", disabled=True),
+                "field_or_metric": st.column_config.TextColumn("field_or_metric", disabled=True),
+                "selected_value": st.column_config.TextColumn("selected_value", disabled=True),
+                "independent_value": st.column_config.TextColumn("independent_value", disabled=True),
+                "qa_status": st.column_config.TextColumn("qa_status", disabled=True),
+                "approval_decision": st.column_config.SelectboxColumn(
+                    "approval_decision",
+                    options=APPROVAL_DECISIONS,
+                ),
+                "approved_value": st.column_config.TextColumn("approved_value"),
+                "approval_note": st.column_config.TextColumn("approval_note"),
+            },
+        )
+        if st.form_submit_button("Save approvals", type="primary"):
+            st.session_state["data_confirmation_approvals"] = edited.copy()
+            st.success("Approvals saved.")
+            return edited.copy()
+    return approvals
+
+
+def _render_step_8_publish(comparison: pd.DataFrame, approvals: pd.DataFrame) -> None:
+    approved = approvals if isinstance(approvals, pd.DataFrame) and not approvals.empty else st.session_state.get("data_confirmation_approvals")
+    if not isinstance(approved, pd.DataFrame) or approved.empty:
+        st.info("No approvals saved yet.")
+    else:
+        decisions = approved["approval_decision"].value_counts().to_dict() if "approval_decision" in approved.columns else {}
+        cols = st.columns(3)
+        cols[0].metric("Approved rows", len(approved[approved.get("approval_decision", "").astype(str).ne("Needs review")]) if "approval_decision" in approved.columns else 0)
+        cols[1].metric("Needs review", int(decisions.get("Needs review", 0)))
+        cols[2].metric("Material differences", int((comparison.get("qa_status", pd.Series(dtype=str)).astype(str) == "material_difference").sum()) if isinstance(comparison, pd.DataFrame) and not comparison.empty else 0)
+
+    export_frames = []
+    if isinstance(comparison, pd.DataFrame) and not comparison.empty:
+        export_frames.append(comparison.assign(export_section="comparison"))
+    if isinstance(approved, pd.DataFrame) and not approved.empty:
+        export_frames.append(approved.assign(export_section="approvals"))
+    export_df = pd.concat(export_frames, ignore_index=True, sort=False) if export_frames else pd.DataFrame()
+    if not export_df.empty:
+        st.download_button(
+            "Download source_qa_workpaper.csv",
+            data=export_df.to_csv(index=False).encode("utf-8"),
+            file_name="source_qa_workpaper.csv",
+            mime="text/csv",
+        )
 
 
 def data_confirmation_export() -> pd.DataFrame:
@@ -232,12 +761,34 @@ def data_confirmation_export() -> pd.DataFrame:
 
 
 def _render_human_workflow_cards() -> None:
-    for item in HUMAN_WORKFLOW_STEPS:
-        with st.container(border=True):
-            st.markdown(f"**{item['step']}**")
-            st.markdown(f"**Human action:** {item['human_action']}")
-            st.markdown(f"**System action:** {item['system_action']}")
-            st.markdown(f"**Decision output:** {item['decision_output']}")
+    methodology_id = st.session_state.get("methodology_id", "moodys_ccd_go")
+    registry = pd.DataFrame()
+    comparison = pd.DataFrame()
+    approvals = pd.DataFrame()
+
+    with st.expander("1. Lock deal context", expanded=True):
+        _render_step_1_context()
+
+    with st.expander("2. Register files", expanded=True):
+        registry = _render_step_2_file_registry()
+
+    with st.expander("3. Locate evidence", expanded=True):
+        _render_step_3_source_map(registry)
+
+    with st.expander("4. Extract candidates", expanded=True):
+        _render_step_4_candidates(methodology_id)
+
+    with st.expander("5. Compare sources", expanded=True):
+        comparison = _render_step_5_comparison(methodology_id)
+
+    with st.expander("6. AI review", expanded=False):
+        _render_step_6_ai_review(comparison)
+
+    with st.expander("7. Approve value", expanded=False):
+        approvals = _render_step_7_approval(comparison)
+
+    with st.expander("8. Publish outputs", expanded=False):
+        _render_step_8_publish(comparison, approvals)
 
 
 def render_data_confirmation_workflow(methodology_id: str) -> None:
