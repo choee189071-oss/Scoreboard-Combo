@@ -14,7 +14,6 @@ from engine.calculator_engine import calculate_all_formulas
 from engine.factor_engine import load_factor_template
 from engine.rating_audit import build_rating_audit_trail
 from engine.rating_engine import run_rating_engine, summarize_rating_output
-from utils.data_confirmation import render_data_confirmation_workflow
 from utils.manual_scores import render_manual_score_editor
 from utils.source_workflow import (
     _direct_metric_debug_frame,
@@ -258,12 +257,16 @@ methodology_id = st.session_state.get("methodology_id", "moodys_ccd_go")
 issuer_data = st.session_state.get("issuer_data", {}) or {}
 
 with st.container(border=True):
-    st.markdown("**1. Data Confirmation Workflow**")
-    render_data_confirmation_workflow(methodology_id)
+    st.markdown("**1. Source Data**")
+    render_source_workflow(methodology_id)
 
 with st.container(border=True):
-    st.markdown("**2. Source Data**")
-    render_source_workflow(methodology_id)
+    st.markdown("**Source QA checkpoint**")
+    st.caption(
+        "Use the separate Data Confirmation page to classify source files, locate ACFR evidence, "
+        "compare independent values, and save human approvals."
+    )
+    st.page_link("pages/0_Data_Confirmation.py", label="Open Data Confirmation")
 
 issuer_data = st.session_state.get("issuer_data", {}) or {}
 formula_results = st.session_state.get("methodology_formula_results")
@@ -271,7 +274,7 @@ if not isinstance(formula_results, pd.DataFrame) or formula_results.empty:
     formula_results = st.session_state.get("formula_results")
 
 with st.container(border=True):
-    st.markdown("**3. Formula Calculation**")
+    st.markdown("**2. Formula Calculation**")
     if issuer_data and st.button("Run formulas from current issuer_data", type="primary"):
         try:
             formula_issuer_data = dict(issuer_data)
@@ -327,7 +330,7 @@ with st.container(border=True):
         st.info("Formula results have not been created yet.")
 
 with st.container(border=True):
-    st.markdown("**4. Manual Scores and Scoreboard**")
+    st.markdown("**3. Manual Scores and Scoreboard**")
     if isinstance(formula_results, pd.DataFrame) and not formula_results.empty:
         try:
             template = load_factor_template(methodology_id, templates_dir="templates")

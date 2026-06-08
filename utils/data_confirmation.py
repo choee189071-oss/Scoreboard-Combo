@@ -562,7 +562,7 @@ def _render_step_1_context() -> None:
 def _render_step_2_file_registry() -> pd.DataFrame:
     registry = _current_source_registry()
     if registry.empty:
-        st.info("No source files uploaded yet. Use Source Data below to upload CreditScope, ACFR, and debt support files.")
+        st.info("No source files uploaded yet. Use Workflow > Source Data to upload CreditScope, ACFR, and debt support files.")
     else:
         st.dataframe(clean_for_display(registry), width="stretch", hide_index=True)
     return registry

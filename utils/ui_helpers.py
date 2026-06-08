@@ -7,7 +7,8 @@ import streamlit as st
 
 WORKFLOW_STEPS: List[Tuple[str, str, str]] = [
     ("workflow", "1", "Workflow"),
-    ("developer_tools", "2", "Developer Tools"),
+    ("data_confirmation", "2", "Data Confirmation"),
+    ("developer_tools", "3", "Developer Tools"),
 ]
 
 SCHEME_OPTIONS: Dict[str, str] = {
@@ -141,6 +142,14 @@ def inject_css() -> None:
 def step_status(step_key: str) -> str:
     if step_key == "workflow":
         return "done" if st.session_state.get("rating_output") else "todo"
+    if step_key == "data_confirmation":
+        approvals = st.session_state.get("data_confirmation_approvals")
+        comparison = st.session_state.get("data_confirmation_comparison")
+        if isinstance(approvals, pd.DataFrame) and not approvals.empty:
+            return "done"
+        if isinstance(comparison, pd.DataFrame) and not comparison.empty:
+            return "done"
+        return "todo"
     if step_key == "developer_tools":
         df = st.session_state.get("formula_results")
         return "done" if isinstance(df, pd.DataFrame) and not df.empty else "todo"
