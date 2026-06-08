@@ -15,7 +15,11 @@ from engine.factor_engine import load_factor_template
 from engine.rating_audit import build_rating_audit_trail
 from engine.rating_engine import run_rating_engine, summarize_rating_output
 from utils.manual_scores import render_manual_score_editor
-from utils.source_workflow import render_source_workflow
+from utils.source_workflow import (
+    _direct_metric_debug_frame,
+    _workbook_direct_metric_overrides,
+    render_source_workflow,
+)
 from utils.ui_helpers import (
     SCHEME_OPTIONS,
     action_panel,
@@ -264,7 +268,17 @@ with st.container(border=True):
     st.markdown("**2. Formula Calculation**")
     if issuer_data and st.button("Run formulas from current issuer_data", type="primary"):
         try:
-            formula_results = calculate_all_formulas(issuer_data)
+            formula_issuer_data = dict(issuer_data)
+            direct_metric_overrides = _workbook_direct_metric_overrides(methodology_id)
+            for field, item in direct_metric_overrides.items():
+                formula_issuer_data[field] = item.get("workbook_value")
+            if direct_metric_overrides:
+                st.session_state["issuer_data"] = formula_issuer_data
+                st.session_state["workbook_direct_metric_debug"] = _direct_metric_debug_frame(
+                    direct_metric_overrides,
+                    formula_issuer_data,
+                )
+            formula_results = calculate_all_formulas(formula_issuer_data)
             st.session_state["formula_results"] = formula_results
             try:
                 template = load_factor_template(methodology_id, templates_dir="templates")
@@ -274,6 +288,13 @@ with st.container(border=True):
                 ].copy()
             except Exception:
                 st.session_state["methodology_formula_results"] = formula_results
+            if direct_metric_overrides:
+                with st.expander("Workbook direct metric debug", expanded=True):
+                    st.dataframe(
+                        clean_for_display(st.session_state["workbook_direct_metric_debug"]),
+                        width="stretch",
+                        hide_index=True,
+                    )
             st.success(f"Saved {len(formula_results)} formula results.")
         except Exception as exc:
             st.error("Could not run formulas from issuer_data.")
