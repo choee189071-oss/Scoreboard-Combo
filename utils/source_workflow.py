@@ -295,6 +295,7 @@ def _workbook_direct_metric_overrides(methodology_id: str) -> Dict[str, Dict[str
     formula_ids = set(_cached_methodology_formula_ids(methodology_id))
     uploads = st.session_state.get("uploaded_issuer_data", {}) or {}
     candidate_uploads = st.session_state.get("uploaded_source_candidates", {}) or {}
+    uploaded_sources = st.session_state.get("uploaded_sources", {}) or {}
     overrides: Dict[str, Dict[str, Any]] = {}
     for upload_key, payload in uploads.items():
         if not isinstance(payload, dict):
@@ -324,6 +325,26 @@ def _workbook_direct_metric_overrides(methodology_id: str) -> Dict[str, Dict[str
             if field_name not in formula_ids or not _has_source_value(value):
                 continue
             row_source = str(row.get("source_name") or row.get("canonical_source") or source_used).strip()
+            row_detail = str(row.get("source_cell_or_api") or row.get("source_detail") or "").strip()
+            overrides[field_name] = {
+                "source_used": f"{row_source}: {row_detail}" if row_detail else row_source,
+                "workbook_value": value,
+            }
+    for upload_key, candidates in candidate_uploads.items():
+        if upload_key in uploads:
+            continue
+        if str(upload_key).strip().lower() != "creditscope":
+            continue
+        if not isinstance(candidates, pd.DataFrame) or candidates.empty:
+            continue
+        file_name = str(uploaded_sources.get(upload_key, "") or "").strip()
+        fallback_source = f"CreditScope: {file_name}" if file_name else "CreditScope"
+        for _, row in candidates.iterrows():
+            field_name = str(row.get("field_name", "") or "").strip()
+            value = row.get("value")
+            if field_name not in formula_ids or not _has_source_value(value):
+                continue
+            row_source = str(row.get("source_name") or row.get("canonical_source") or fallback_source).strip()
             row_detail = str(row.get("source_cell_or_api") or row.get("source_detail") or "").strip()
             overrides[field_name] = {
                 "source_used": f"{row_source}: {row_detail}" if row_detail else row_source,
