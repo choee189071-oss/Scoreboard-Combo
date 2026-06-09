@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
+import os
 import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
@@ -35,18 +37,24 @@ HUMAN_WORKFLOW_STEPS: List[Dict[str, str]] = [
     },
     {
         "step": "4. Evidence Workbench",
-        "human_action": "Add independent evidence only for fields you want to validate or replace.",
+        "human_action": "Add independent evidence only for fields you want to validate or replace, or send rows to AI Evidence Assist.",
         "system_action": "Keep blank evidence as Awaiting Evidence, not as a review problem.",
         "decision_output": "Evidence result",
     },
     {
-        "step": "5. Approval Decisions",
+        "step": "5. AI Evidence Assist",
+        "human_action": "Paste located ACFR/API/OS snippets and run AI extraction for selected fields.",
+        "system_action": "Return candidate evidence values, citations, confidence, and suggested actions without approving them.",
+        "decision_output": "AI evidence candidate",
+    },
+    {
+        "step": "6. Approval Decisions",
         "human_action": "Approve only rows with entered evidence or a real variance/review issue.",
         "system_action": "Carry approved values forward and leave untouched rows out of the review queue.",
         "decision_output": "Approved value",
     },
     {
-        "step": "6. Publish Outputs",
+        "step": "7. Publish Outputs",
         "human_action": "Run rating, report, and presentation exports with trust metrics attached.",
         "system_action": "Carry completeness, evidence coverage, and approval labels into outputs.",
         "decision_output": "Auditable rating",
@@ -461,6 +469,25 @@ FIELD_REVIEW_ACTIONS = [
     "Send to review later",
 ]
 CONFIDENCE_OPTIONS = ["High", "Medium", "Low"]
+AI_EVIDENCE_ACTIONS = ["Accept System Value", "Replace With Evidence Value", "Send To Review", "Await Evidence"]
+AI_EVIDENCE_RESULT_COLUMNS = [
+    "selected",
+    "field_name",
+    "factor",
+    "system_value",
+    "extracted_value",
+    "unit",
+    "evidence_source",
+    "evidence_page",
+    "evidence_line_item",
+    "citation",
+    "confidence",
+    "suggested_action",
+    "reasoning",
+    "extraction_status",
+    "model",
+    "last_updated",
+]
 CONFIRMED_INPUT_COLUMNS = [
     "issuer",
     "fiscal_year",
@@ -1881,6 +1908,283 @@ def _save_confirmation_checks(edited: pd.DataFrame) -> None:
     st.session_state["data_confirmation_checks"] = edited.copy()
 
 
+def _openai_api_key() -> str:
+    for name in ("OPENAI_API_KEY", "openai_api_key"):
+        value = os.environ.get(name)
+        if value:
+            return str(value)
+    try:
+        for name in ("OPENAI_API_KEY", "openai_api_key"):
+            try:
+                value = st.secrets.get(name)
+            except Exception:
+                value = None
+            if value:
+                return str(value)
+    except Exception:
+        return ""
+    return ""
+
+
+def _openai_model() -> str:
+    for name in ("OPENAI_MODEL", "openai_model"):
+        value = os.environ.get(name)
+        if value:
+            return str(value)
+    try:
+        for name in ("OPENAI_MODEL", "openai_model"):
+            try:
+                value = st.secrets.get(name)
+            except Exception:
+                value = None
+            if value:
+                return str(value)
+    except Exception:
+        pass
+    return "gpt-4o-mini"
+
+
+def _json_object_from_text(text: Any) -> dict[str, Any]:
+    raw = str(text or "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else {}
+    except json.JSONDecodeError:
+        pass
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start >= 0 and end > start:
+        try:
+            parsed = json.loads(raw[start : end + 1])
+            return parsed if isinstance(parsed, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
+def _ai_evidence_results_frame() -> pd.DataFrame:
+    frame = st.session_state.get("ai_evidence_results")
+    if isinstance(frame, pd.DataFrame):
+        out = frame.copy()
+    else:
+        out = pd.DataFrame(columns=AI_EVIDENCE_RESULT_COLUMNS)
+    for col in AI_EVIDENCE_RESULT_COLUMNS:
+        if col not in out.columns:
+            out[col] = False if col == "selected" else ""
+    return out[AI_EVIDENCE_RESULT_COLUMNS + [col for col in out.columns if col not in AI_EVIDENCE_RESULT_COLUMNS]]
+
+
+def _upsert_ai_evidence_result(result: dict[str, Any]) -> pd.DataFrame:
+    existing = _ai_evidence_results_frame()
+    field = str(result.get("field_name", "") or "").strip()
+    if field and not existing.empty and "field_name" in existing.columns:
+        existing = existing[~existing["field_name"].astype(str).eq(field)].copy()
+    updated = pd.concat([existing, pd.DataFrame([result])], ignore_index=True, sort=False)
+    st.session_state["ai_evidence_results"] = updated
+    return updated
+
+
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value or "").strip().lower() in {"1", "true", "yes", "y", "selected", "checked"}
+
+
+def _ai_confidence(value: Any) -> float:
+    parsed = _parse_float(value)
+    if parsed is None:
+        return 0.0
+    if parsed > 1 and parsed <= 100:
+        parsed = parsed / 100
+    return max(0.0, min(1.0, parsed))
+
+
+def _ai_evidence_strength(confidence: float, citation: Any, line_item: Any) -> str:
+    if confidence >= 0.85 and (_has_value(citation) or _has_value(line_item)):
+        return "Strong"
+    if confidence >= 0.6:
+        return "Medium"
+    return "Weak"
+
+
+def _ai_evidence_prompt(row: pd.Series, evidence_text: str) -> list[dict[str, str]]:
+    field = str(row.get("field_name", "") or "").strip()
+    context = {
+        "field_name": field,
+        "factor": row.get("factor", ""),
+        "priority_class": row.get("priority_class", row.get("requirement_class", "")),
+        "evidence_role": row.get("evidence_role", ""),
+        "system_value": row.get("system_value", row.get("current_source_value", "")),
+        "system_source": row.get("system_source", row.get("current_source", "")),
+        "expected_source": row.get("expected_source", row.get("preferred_sources", "")),
+        "suggested_document_section": row.get("suggested_document_section", ""),
+        "definition_or_hint": row.get("evidence_target", "") or FIELD_EVIDENCE_HINTS.get(field, ""),
+    }
+    schema = {
+        "field_name": field,
+        "extracted_value": "number or null",
+        "unit": "short unit label",
+        "evidence_source": "ACFR, Official Statement, BEA, Census, workbook, or other source label",
+        "evidence_page": "page number or blank",
+        "evidence_line_item": "line item/table title used",
+        "citation": "page/table/line citation from provided text",
+        "confidence": "0 to 1",
+        "suggested_action": "Accept System Value, Replace With Evidence Value, Send To Review, or Await Evidence",
+        "reasoning": "one short explanation grounded only in the provided text",
+        "extraction_status": "value_found, no_value_found, ambiguous, or not_applicable",
+    }
+    user_content = (
+        "Current rating data context:\n"
+        f"{json.dumps(context, ensure_ascii=False, default=str)}\n\n"
+        "Evidence text/snippet to inspect:\n"
+        f"{evidence_text[:14000]}\n\n"
+        "Return one JSON object matching this schema:\n"
+        f"{json.dumps(schema, ensure_ascii=False)}"
+    )
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You are a municipal credit data verification assistant. "
+                "Extract candidate evidence values only from the provided text. "
+                "Do not invent numbers. If the provided text does not support the field, return extracted_value null. "
+                "Do not change methodology formulas, score thresholds, rating mappings, or final ratings."
+            ),
+        },
+        {"role": "user", "content": user_content},
+    ]
+
+
+def _openai_chat_json(model: str, messages: list[dict[str, str]]) -> dict[str, Any]:
+    api_key = _openai_api_key()
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY is not configured in environment variables or Streamlit secrets.")
+    try:
+        from openai import OpenAI  # type: ignore
+
+        client = OpenAI(api_key=api_key)
+        try:
+            completion = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                temperature=0,
+                response_format={"type": "json_object"},
+            )
+        except Exception as exc:
+            if "response_format" not in str(exc).lower():
+                raise
+            completion = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                temperature=0,
+            )
+        content = completion.choices[0].message.content
+        return _json_object_from_text(content)
+    except ImportError:
+        import openai  # type: ignore
+
+        openai.api_key = api_key
+        completion = openai.ChatCompletion.create(model=model, messages=messages, temperature=0)
+        content = completion["choices"][0]["message"]["content"]
+        return _json_object_from_text(content)
+
+
+def _normalize_ai_evidence_result(row: pd.Series, payload: dict[str, Any], model: str) -> dict[str, Any]:
+    field = str(row.get("field_name", "") or "").strip()
+    extracted_value = payload.get("extracted_value")
+    if isinstance(extracted_value, (list, dict)):
+        extracted_value = json.dumps(extracted_value, ensure_ascii=False, default=str)
+    confidence = _ai_confidence(payload.get("confidence"))
+    suggested_action = str(payload.get("suggested_action", "") or "").strip()
+    if suggested_action not in AI_EVIDENCE_ACTIONS:
+        if not _has_value(extracted_value):
+            suggested_action = "Await Evidence"
+        else:
+            status = _validation_status(field, row.get("system_value"), extracted_value)
+            suggested_action = "Accept System Value" if status in {"Verified", "Supported"} else "Send To Review"
+    evidence_source = str(payload.get("evidence_source", "") or _evidence_source_label(row) or "AI Evidence Assist").strip()
+    citation = str(payload.get("citation", "") or "").strip()
+    evidence_page = str(payload.get("evidence_page", "") or "").strip()
+    evidence_line_item = str(payload.get("evidence_line_item", "") or "").strip()
+    if not citation and evidence_page:
+        citation = f"Page {evidence_page}"
+    extraction_status = str(payload.get("extraction_status", "") or "").strip()
+    if not extraction_status:
+        extraction_status = "value_found" if _has_value(extracted_value) else "no_value_found"
+    return {
+        "selected": bool(_has_value(extracted_value)),
+        "field_name": field,
+        "factor": row.get("factor", ""),
+        "system_value": row.get("system_value", row.get("current_source_value", "")),
+        "extracted_value": "" if extracted_value is None else extracted_value,
+        "unit": str(payload.get("unit", "") or "").strip(),
+        "evidence_source": evidence_source,
+        "evidence_page": evidence_page,
+        "evidence_line_item": evidence_line_item,
+        "citation": citation,
+        "confidence": confidence,
+        "suggested_action": suggested_action,
+        "reasoning": str(payload.get("reasoning", "") or "").strip(),
+        "extraction_status": extraction_status,
+        "model": model,
+        "last_updated": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _run_ai_evidence_extraction(row: pd.Series, evidence_text: str, model: str) -> dict[str, Any]:
+    if not evidence_text.strip():
+        raise RuntimeError("Evidence text is empty. Paste the located ACFR/OS/API snippet before running AI extraction.")
+    payload = _openai_chat_json(model, _ai_evidence_prompt(row, evidence_text))
+    if not payload:
+        raise RuntimeError("The AI response did not contain a usable JSON object.")
+    return _normalize_ai_evidence_result(row, payload, model)
+
+
+def _apply_ai_evidence_results(methodology_id: str, results: pd.DataFrame) -> int:
+    if not isinstance(results, pd.DataFrame) or results.empty:
+        return 0
+    checks = _confirmation_checks(methodology_id).copy()
+    if checks.empty or "field_name" not in checks.columns:
+        return 0
+    applied = 0
+    for _, result in results.iterrows():
+        if not _truthy(result.get("selected", True)):
+            continue
+        field = str(result.get("field_name", "") or "").strip()
+        extracted_value = result.get("extracted_value")
+        if not field or not _has_value(extracted_value):
+            continue
+        mask = checks["field_name"].astype(str).eq(field)
+        if not mask.any():
+            continue
+        source = str(result.get("evidence_source", "") or "AI Evidence Assist").strip()
+        line_item = str(result.get("evidence_line_item", "") or "").strip()
+        citation = str(result.get("citation", "") or result.get("evidence_page", "") or "").strip()
+        confidence = _ai_confidence(result.get("confidence"))
+        source_note = "; ".join(item for item in [source, line_item] if item)
+        review_note = str(result.get("reasoning", "") or "").strip()
+        if review_note:
+            review_note = f"AI Evidence Assist: {review_note}"
+        else:
+            review_note = "AI Evidence Assist supplied this candidate evidence value."
+        current_value = checks.loc[mask, "current_source_value"].iloc[0] if "current_source_value" in checks.columns else ""
+        checks.loc[mask, "independent_value"] = extracted_value
+        checks.loc[mask, "independent_source"] = source_note or source
+        checks.loc[mask, "citation"] = citation
+        checks.loc[mask, "review_note"] = review_note
+        checks.loc[mask, "evidence_source"] = source
+        checks.loc[mask, "evidence_strength"] = _ai_evidence_strength(confidence, citation, line_item)
+        checks.loc[mask, "validation_status"] = _validation_status(field, current_value, extracted_value, "")
+        applied += 1
+    if applied:
+        st.session_state["data_confirmation_checks"] = checks
+    return applied
+
+
 def _render_step_1_context() -> None:
     cols = st.columns(3)
     cols[0].metric("Issuer", st.session_state.get("issuer_name") or "Not set")
@@ -2167,6 +2471,115 @@ def _render_step_4_candidates(methodology_id: str) -> None:
             st.success("Evidence validation saved.")
 
 
+def _render_ai_evidence_assist(methodology_id: str) -> None:
+    evidence = _evidence_validation_frame(methodology_id)
+    if not isinstance(evidence, pd.DataFrame) or evidence.empty:
+        st.info("No evidence rows are ready for AI assistance yet. Save issuer_data or resolve active blockers first.")
+        return
+
+    st.caption(
+        "AI reads only the evidence text you provide here and writes candidate evidence fields. "
+        "It does not approve values or change the rating by itself."
+    )
+    api_key_available = bool(_openai_api_key())
+    if not api_key_available:
+        st.warning("OPENAI_API_KEY is not configured. Add it in Streamlit secrets or environment variables to enable AI extraction.")
+
+    model = st.text_input("OpenAI model", value=_openai_model(), key="ai_evidence_model")
+    options = list(evidence.index)
+
+    def option_label(idx: int) -> str:
+        row = evidence.loc[idx]
+        field = str(row.get("field_name", "") or "")
+        factor = str(row.get("factor", "") or "")
+        value = row.get("system_value", "")
+        status = str(row.get("validation_status", "") or "")
+        return f"{field} | {factor} | system={value} | {status}"
+
+    selected_idx = st.selectbox(
+        "Field to run",
+        options,
+        format_func=option_label,
+        key="ai_evidence_field_index",
+    )
+    selected_row = evidence.loc[selected_idx]
+    context_cols = st.columns(3)
+    context_cols[0].metric("System Value", selected_row.get("system_value", ""))
+    context_cols[1].metric("Evidence Status", selected_row.get("validation_status", ""))
+    context_cols[2].metric("Evidence Role", selected_row.get("evidence_role", ""))
+    st.caption(f"Suggested section: {selected_row.get('suggested_document_section', '') or selected_row.get('evidence_target', '')}")
+    evidence_text = st.text_area(
+        "Paste located ACFR / OS / API / workbook text",
+        value=st.session_state.get("ai_evidence_text", ""),
+        height=220,
+        key="ai_evidence_text",
+        placeholder="Paste the table rows, page text, OCR output, or API record that should support this field.",
+    )
+    run_disabled = (not api_key_available) or (not str(evidence_text or "").strip()) or (not str(model or "").strip())
+    if st.button("Run AI extraction for selected field", type="primary", disabled=run_disabled):
+        try:
+            with st.spinner("Running AI evidence extraction..."):
+                result = _run_ai_evidence_extraction(selected_row, evidence_text, model.strip())
+            _upsert_ai_evidence_result(result)
+            st.success(f"AI evidence candidate saved for {result.get('field_name')}.")
+        except Exception as exc:
+            st.error("AI evidence extraction failed.")
+            st.exception(exc)
+
+    results = _ai_evidence_results_frame()
+    if results.empty:
+        st.info("No AI evidence candidates have been created yet.")
+        return
+
+    st.markdown("**AI evidence candidates**")
+    st.caption("Review these rows first. Applying them only pre-fills Evidence Workbench; Approval Decisions still controls final adoption.")
+    result_cols = [
+        "selected",
+        "field_name",
+        "system_value",
+        "extracted_value",
+        "unit",
+        "evidence_source",
+        "evidence_page",
+        "evidence_line_item",
+        "citation",
+        "confidence",
+        "suggested_action",
+        "reasoning",
+        "extraction_status",
+    ]
+    edited_results = st.data_editor(
+        clean_for_display(results[[col for col in result_cols if col in results.columns]]),
+        width="stretch",
+        hide_index=True,
+        num_rows="fixed",
+        key="ai_evidence_results_editor",
+        column_config={
+            "selected": st.column_config.CheckboxColumn("Apply", default=True),
+            "field_name": st.column_config.TextColumn("Field", disabled=True),
+            "system_value": st.column_config.TextColumn("System Value", disabled=True),
+            "extracted_value": st.column_config.TextColumn("AI Evidence Value"),
+            "unit": st.column_config.TextColumn("Unit"),
+            "evidence_source": st.column_config.TextColumn("Evidence Source"),
+            "evidence_page": st.column_config.TextColumn("Evidence Page"),
+            "evidence_line_item": st.column_config.TextColumn("Evidence Line Item"),
+            "citation": st.column_config.TextColumn("Citation"),
+            "confidence": st.column_config.NumberColumn("AI Confidence", min_value=0.0, max_value=1.0, format="%.2f"),
+            "suggested_action": st.column_config.SelectboxColumn("Suggested Action", options=AI_EVIDENCE_ACTIONS),
+            "reasoning": st.column_config.TextColumn("AI Reasoning"),
+            "extraction_status": st.column_config.TextColumn("Extraction Status", disabled=True),
+        },
+    )
+    if st.button("Apply selected AI suggestions to Evidence Workbench"):
+        applied = _apply_ai_evidence_results(methodology_id, edited_results)
+        st.session_state["ai_evidence_results"] = edited_results.copy()
+        if applied:
+            st.success(f"Applied {applied} AI evidence candidate(s). Review them in Evidence Workbench, then approve in Approval Decisions.")
+            st.rerun()
+        else:
+            st.warning("No AI evidence candidates were applied. Select rows with an AI Evidence Value first.")
+
+
 def _source_name_from_text(value: Any, fallback: str = "ACFR") -> str:
     text = str(value or "").lower()
     if "bea" in text:
@@ -2441,10 +2854,13 @@ def _render_human_workflow_cards() -> None:
     with st.expander("4. Evidence Workbench", expanded=True):
         _render_step_4_candidates(methodology_id)
 
-    with st.expander("5. Approval Decisions", expanded=True):
+    with st.expander("5. AI Evidence Assist", expanded=True):
+        _render_ai_evidence_assist(methodology_id)
+
+    with st.expander("6. Approval Decisions", expanded=True):
         approvals = _render_step_5_reconciliation(methodology_id)
 
-    with st.expander("6. Publish Outputs", expanded=False):
+    with st.expander("7. Publish Outputs", expanded=False):
         _render_step_6_publish(methodology_id, approvals)
 
 
