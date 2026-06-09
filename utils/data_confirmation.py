@@ -10,6 +10,7 @@ from typing import Any, Dict, Iterable, List
 import pandas as pd
 import streamlit as st
 
+from engine.calculator_engine import calculate_all_formulas
 from engine.data_sourcing_engine import normalize_source_candidates, required_fields_for_methodology
 from engine.factor_engine import load_factor_template
 from utils.manual_scores import manual_score_candidates
@@ -2260,6 +2261,72 @@ def _queue_display(frame: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def _field_level_ai_model() -> str:
+    model = str(st.session_state.get("ai_evidence_inline_model") or _openai_model()).strip()
+    return model or "gpt-4o-mini"
+
+
+def _source_note_from_ai_result(result: dict[str, Any]) -> str:
+    parts = [
+        str(result.get("evidence_source", "") or "").strip(),
+        str(result.get("evidence_line_item", "") or "").strip(),
+        str(result.get("citation", "") or result.get("evidence_page", "") or "").strip(),
+    ]
+    return "; ".join(dict.fromkeys(part for part in parts if part))
+
+
+def _confidence_label_from_ai(result: dict[str, Any]) -> str:
+    confidence = _ai_confidence(result.get("confidence"))
+    if confidence >= 0.85:
+        return "High"
+    if confidence >= 0.55:
+        return "Medium"
+    return "Low"
+
+
+def _render_inline_ai_prefill(row: pd.Series, clean_field: str, field: str) -> None:
+    api_key_available = bool(_openai_api_key())
+    model = _field_level_ai_model()
+    with st.expander("AI evidence extraction for this field", expanded=False):
+        if not api_key_available:
+            st.warning("OPENAI_API_KEY is not configured. Paste-based AI extraction is disabled for this field.")
+        st.caption(
+            "Paste only the relevant ACFR, official statement, API, or workbook excerpt. "
+            "AI will prefill the confirmed value/source fields below; it will not approve or apply the value by itself."
+        )
+        evidence_text = st.text_area(
+            "Evidence excerpt for AI",
+            value=st.session_state.get(f"field_review_ai_text_{clean_field}", ""),
+            height=150,
+            key=f"field_review_ai_text_{clean_field}",
+            placeholder="Paste the page/table/API record that supports this specific field.",
+        )
+        disabled = (not api_key_available) or (not model) or (not str(evidence_text or "").strip())
+        if st.button("AI extract candidate for this field", key=f"field_review_ai_run_{clean_field}", disabled=disabled):
+            try:
+                with st.spinner(f"Extracting candidate value for {field}..."):
+                    result = _run_ai_evidence_extraction(row, evidence_text, model)
+                _upsert_ai_evidence_result(result)
+                extracted_value = result.get("extracted_value")
+                if _has_value(extracted_value):
+                    st.session_state[f"field_review_value_{clean_field}"] = str(extracted_value)
+                    st.session_state[f"field_review_source_{clean_field}"] = _source_note_from_ai_result(result)
+                    note = str(result.get("reasoning", "") or "").strip()
+                    if note:
+                        note = f"AI Evidence Assist: {note}"
+                    else:
+                        note = "AI Evidence Assist extracted this candidate from the pasted evidence."
+                    st.session_state[f"field_review_evidence_{clean_field}"] = note
+                    st.session_state[f"field_review_confidence_{clean_field}"] = _confidence_label_from_ai(result)
+                    st.session_state[f"field_review_action_{clean_field}"] = "Replace with evidence value"
+                    st.session_state["data_confirmation_save_notice"] = f"AI prefilled candidate evidence for {field}."
+                    st.rerun()
+                st.warning("AI did not find a usable value in the pasted excerpt. The result was saved for review.")
+            except Exception as exc:
+                st.error("AI evidence extraction failed.")
+                st.exception(exc)
+
+
 def _render_field_review_panels(frame: pd.DataFrame, title: str) -> None:
     if not isinstance(frame, pd.DataFrame) or frame.empty:
         st.info(f"No {title.lower()} fields need action.")
@@ -2290,33 +2357,44 @@ def _render_field_review_panels(frame: pd.DataFrame, title: str) -> None:
             clean_field = re.sub(r"[^A-Za-z0-9_]+", "_", field)
             default_value = row.get("independent_value") if _has_value(row.get("independent_value")) else row.get("current_source_value")
             action_default = 1 if status == "Missing" else 0
+            action_key = f"field_review_action_{clean_field}"
+            evidence_key = f"field_review_evidence_{clean_field}"
+            value_key = f"field_review_value_{clean_field}"
+            source_key = f"field_review_source_{clean_field}"
+            confidence_key = f"field_review_confidence_{clean_field}"
+            if action_key not in st.session_state:
+                st.session_state[action_key] = FIELD_REVIEW_ACTIONS[action_default]
+            if evidence_key not in st.session_state:
+                st.session_state[evidence_key] = str(row.get("review_note", "") or "")
+            if value_key not in st.session_state:
+                st.session_state[value_key] = "" if default_value is None else str(default_value)
+            if source_key not in st.session_state:
+                st.session_state[source_key] = str(row.get("independent_source", "") or row.get("current_source", "") or "")
+            if confidence_key not in st.session_state:
+                st.session_state[confidence_key] = "Medium"
+            _render_inline_ai_prefill(row, clean_field, field)
             with st.form(f"field_review_form_{clean_field}"):
                 action = st.selectbox(
                     "Action",
                     FIELD_REVIEW_ACTIONS,
-                    index=action_default,
-                    key=f"field_review_action_{clean_field}",
+                    key=action_key,
                 )
                 evidence_note = st.text_area(
                     "Evidence Input Box",
-                    value=str(row.get("review_note", "") or ""),
-                    key=f"field_review_evidence_{clean_field}",
+                    key=evidence_key,
                 )
                 confirmed_value = st.text_input(
                     "Confirmed Value",
-                    value="" if default_value is None else str(default_value),
-                    key=f"field_review_value_{clean_field}",
+                    key=value_key,
                 )
                 source_note = st.text_input(
                     "Source Note",
-                    value=str(row.get("independent_source", "") or row.get("current_source", "") or ""),
-                    key=f"field_review_source_{clean_field}",
+                    key=source_key,
                 )
                 confidence = st.selectbox(
                     "Confidence",
                     CONFIDENCE_OPTIONS,
-                    index=1,
-                    key=f"field_review_confidence_{clean_field}",
+                    key=confidence_key,
                 )
                 if st.form_submit_button("Save confirmed input", type="primary"):
                     confirmed_row = _confirmed_row_from_action(
@@ -2367,6 +2445,16 @@ def _render_data_completeness_review(methodology_id: str) -> pd.DataFrame:
         "Rating Blockers are the only fields in this section that stop formulas. "
         "Source readiness missing rows are evidence/support gaps unless they also appear here as Rating Blockers."
     )
+    if _openai_api_key():
+        if "ai_evidence_inline_model" not in st.session_state:
+            st.session_state["ai_evidence_inline_model"] = _openai_model()
+        st.text_input(
+            "AI evidence model",
+            key="ai_evidence_inline_model",
+            help="Used by the field-level AI extraction buttons inside the review panels.",
+        )
+    else:
+        st.caption("Field-level AI extraction is available after OPENAI_API_KEY is configured.")
 
     st.markdown("**Priority Review Queue**")
     st.caption(
@@ -2419,6 +2507,64 @@ def _render_metric_calculation_checkpoint() -> None:
         width="stretch",
         hide_index=True,
     )
+
+
+def _render_field_level_ai_cards(methodology_id: str, evidence: pd.DataFrame) -> None:
+    if not isinstance(evidence, pd.DataFrame) or evidence.empty:
+        return
+    st.markdown("**Field-level AI evidence search**")
+    st.caption(
+        "Each rating input below has its own AI extraction card. Paste the located ACFR/API/OS/workbook excerpt; "
+        "AI extracts a candidate value and pre-fills the Evidence Workbench for human approval."
+    )
+    api_key_available = bool(_openai_api_key())
+    if not api_key_available:
+        st.warning("OPENAI_API_KEY is not configured. Field-level AI cards are visible, but extraction is disabled.")
+    model = _field_level_ai_model()
+    st.caption(f"AI model: {model}")
+
+    display = evidence.copy()
+    if "validation_status" in display.columns:
+        status_rank = {"Needs Review": 0, "Awaiting Evidence": 1, "Unverified": 1, "Supported": 2, "Verified": 3}
+        display["inline_rank"] = display["validation_status"].map(status_rank).fillna(9)
+        display = display.sort_values(["inline_rank", "factor", "field_name"])
+
+    for _, row in display.iterrows():
+        field = str(row.get("field_name", "") or "").strip()
+        if not field:
+            continue
+        clean_field = re.sub(r"[^A-Za-z0-9_]+", "_", field)
+        status = str(row.get("validation_status", "") or "Awaiting Evidence")
+        role = str(row.get("evidence_role", "") or "")
+        label = f"{field} | {role} | {status}"
+        with st.expander(label, expanded=False):
+            cols = st.columns(3)
+            cols[0].metric("System Value", row.get("system_value", ""))
+            cols[1].metric("Evidence Status", status)
+            cols[2].metric("Evidence Role", role)
+            st.caption(f"Suggested section: {row.get('suggested_document_section', '') or row.get('evidence_target', '') or 'Not configured'}")
+            st.caption(f"System source: {row.get('system_source', '') or 'Not available'}")
+            evidence_text = st.text_area(
+                "Paste evidence excerpt for this field",
+                value=st.session_state.get(f"inline_ai_text_{clean_field}", ""),
+                height=160,
+                key=f"inline_ai_text_{clean_field}",
+                placeholder="Paste only the relevant page/table/API record for this field.",
+            )
+            run_disabled = (not api_key_available) or (not str(model or "").strip()) or (not str(evidence_text or "").strip())
+            if st.button("Run AI extraction and prefill evidence", key=f"inline_ai_run_{clean_field}", disabled=run_disabled):
+                try:
+                    with st.spinner(f"Running AI extraction for {field}..."):
+                        result = _run_ai_evidence_extraction(row, evidence_text, str(model).strip())
+                    _upsert_ai_evidence_result(result)
+                    applied = _apply_ai_evidence_results(methodology_id, pd.DataFrame([result]))
+                    if applied:
+                        st.session_state["data_confirmation_save_notice"] = f"AI evidence candidate applied for {field}."
+                        st.rerun()
+                    st.warning("AI did not find a usable value in the provided excerpt. Candidate was saved for review.")
+                except Exception as exc:
+                    st.error("AI evidence extraction failed.")
+                    st.exception(exc)
 
 
 def _render_step_4_candidates(methodology_id: str) -> None:
@@ -2508,6 +2654,8 @@ def _render_step_4_candidates(methodology_id: str) -> None:
         if st.form_submit_button("Save evidence validation", type="primary"):
             _save_confirmation_checks(edited)
             st.success("Evidence validation saved.")
+    with st.expander("AI extraction cards for each rating input", expanded=False):
+        _render_field_level_ai_cards(methodology_id, evidence)
 
 
 def _render_ai_evidence_assist(methodology_id: str) -> None:
@@ -2701,6 +2849,55 @@ def _approval_candidates(approvals: pd.DataFrame) -> pd.DataFrame:
     return normalize_source_candidates(pd.DataFrame(rows)) if rows else pd.DataFrame()
 
 
+def _methodology_formula_results(methodology_id: str, formula_results: pd.DataFrame) -> pd.DataFrame:
+    if not isinstance(formula_results, pd.DataFrame) or formula_results.empty:
+        return pd.DataFrame()
+    try:
+        template = load_factor_template(methodology_id, templates_dir="templates")
+    except Exception:
+        return formula_results.copy()
+    if template.empty or "formula_id" not in template.columns or "formula_id" not in formula_results.columns:
+        return formula_results.copy()
+    ids = set(template["formula_id"].dropna().astype(str))
+    return formula_results[formula_results["formula_id"].astype(str).isin(ids)].copy()
+
+
+def _apply_approved_values_to_issuer_data(methodology_id: str, approvals: pd.DataFrame) -> pd.DataFrame:
+    approved_candidates = _approval_candidates(approvals)
+    if not isinstance(approved_candidates, pd.DataFrame) or approved_candidates.empty:
+        return pd.DataFrame()
+
+    issuer_data = dict(st.session_state.get("issuer_data", {}) or {})
+    rows: list[dict[str, Any]] = []
+    for _, candidate in approved_candidates.iterrows():
+        field = str(candidate.get("field_name", "") or "").strip()
+        value = candidate.get("value")
+        if not field or not _has_value(value):
+            continue
+        previous = issuer_data.get(field, "")
+        issuer_data[field] = value
+        rows.append(
+            {
+                "field_name": field,
+                "previous_value": previous,
+                "applied_value": value,
+                "applied_source": candidate.get("source_name", "") or candidate.get("source_label", ""),
+                "source_detail": candidate.get("source_detail", ""),
+            }
+        )
+
+    if not rows:
+        return pd.DataFrame()
+
+    formula_results = calculate_all_formulas(issuer_data)
+    st.session_state["issuer_data"] = issuer_data
+    st.session_state["formula_results"] = formula_results
+    st.session_state["methodology_formula_results"] = _methodology_formula_results(methodology_id, formula_results)
+    st.session_state["rating_output"] = None
+    st.session_state["approved_source_candidates"] = approved_candidates
+    return pd.DataFrame(rows)
+
+
 def _render_step_5_reconciliation(methodology_id: str) -> pd.DataFrame:
     evidence = _evidence_validation_frame(methodology_id)
     if not isinstance(evidence, pd.DataFrame) or evidence.empty:
@@ -2804,7 +3001,7 @@ def _render_step_5_reconciliation(methodology_id: str) -> pd.DataFrame:
             st.session_state["approved_source_candidates"] = approved_candidates
             st.success("Reconciliation decisions saved.")
             if not approved_candidates.empty:
-                st.caption("Approved values will be included as source candidates on the next Save issuer_data run.")
+                st.caption("Approved values can now be applied directly in Publish Path, or included as source candidates on the next Save issuer_data run.")
             return edited.copy()
     return approvals
 
@@ -2846,6 +3043,23 @@ def _render_step_6_publish(methodology_id: str, approvals: pd.DataFrame) -> None
         cols[0].metric("Accepted System", int(decisions.get("Accept System Value", 0)))
         cols[1].metric("Evidence Replacements", int(decisions.get("Replace With Evidence Value", 0)))
         cols[2].metric("Review Queue", int(decisions.get("Send To Review", 0)))
+        st.caption(
+            "Use this when you want approved values to become the current formula input immediately. "
+            "After applying, rerun the scoreboard because rating_output is cleared."
+        )
+        if st.button("Apply approved values to issuer_data and rerun formulas", type="primary"):
+            applied = _apply_approved_values_to_issuer_data(methodology_id, approved)
+            if applied.empty:
+                st.warning("No approved values were available to apply. Save reconciliation decisions first.")
+            else:
+                st.session_state["data_confirmation_save_notice"] = f"Applied {len(applied)} approved value(s) and recalculated formulas."
+                st.session_state["last_applied_approved_values"] = applied
+                st.rerun()
+
+    last_applied = st.session_state.get("last_applied_approved_values")
+    if isinstance(last_applied, pd.DataFrame) and not last_applied.empty:
+        with st.expander("Last applied values", expanded=False):
+            st.dataframe(clean_for_display(last_applied), width="stretch", hide_index=True)
 
     export_frames = []
     completeness = _completeness_frame(methodology_id)
@@ -2909,27 +3123,24 @@ def _render_operating_lanes(methodology_id: str) -> None:
         "only Rating Path blockers stop the score."
     )
     cols = st.columns(3)
-    lane_metrics = [
-        (
-            "A. Rating Path",
-            f"{blocking_missing} blocking missing / {manual_missing} manual missing",
-            metrics.get("next_action", ""),
-        ),
-        (
-            "B. Evidence Path",
-            f"{evidence_verified} verified / {evidence_awaiting} awaiting / {evidence_variance} variance",
-            f"{rating_inputs} rating inputs are in scope for evidence checks.",
-        ),
-        (
-            "C. Publish Path",
-            f"{approval_count} approval rows",
-            "Only approved values and review notes flow into exports.",
-        ),
-    ]
-    for col, (title, metric, note) in zip(cols, lane_metrics):
-        with col:
-            st.metric(title, metric)
-            st.caption(note)
+    with cols[0]:
+        with st.container(border=True):
+            st.markdown("**A. Rating Path**")
+            st.write(f"Blocking missing: **{blocking_missing}**")
+            st.write(f"Manual missing: **{manual_missing}**")
+            st.caption(str(metrics.get("next_action", "")))
+    with cols[1]:
+        with st.container(border=True):
+            st.markdown("**B. Evidence Path**")
+            st.write(f"Verified/support: **{evidence_verified}**")
+            st.write(f"Awaiting evidence: **{evidence_awaiting}**")
+            st.write(f"Variance/review: **{evidence_variance}**")
+            st.caption(f"{rating_inputs} rating inputs are in scope for evidence checks.")
+    with cols[2]:
+        with st.container(border=True):
+            st.markdown("**C. Publish Path**")
+            st.write(f"Approval rows: **{approval_count}**")
+            st.caption("Only approved values and review notes flow into exports.")
 
     if isinstance(evidence, pd.DataFrame) and not evidence.empty:
         source_counts = evidence["evidence_role"].fillna("").astype(str).value_counts().to_dict()
@@ -2947,28 +3158,34 @@ def _render_human_workflow_cards() -> None:
     render_rating_readiness_overview(methodology_id, expanded=False)
     _render_operating_lanes(methodology_id)
 
-    with st.expander("1. Data Collection", expanded=True):
+    with st.expander("A. Rating Path - required to produce or refresh the rating", expanded=True):
+        st.caption("This is the main workflow. Data enters the formula layer here; B and C are only needed when you want evidence validation or replacements.")
+        st.markdown("**A1. Deal and source context**")
         _render_step_1_context()
         registry = _render_step_2_file_registry()
         with st.expander("Evidence locator map", expanded=False):
             _render_step_3_source_map(registry)
 
-    with st.expander("2. Data Completeness Review", expanded=True):
+        st.markdown("**A2. Data completeness and blocking fields**")
         _render_data_completeness_review(methodology_id)
 
-    with st.expander("3. Metric Calculation", expanded=True):
+        st.markdown("**A3. Formula checkpoint**")
         _render_metric_calculation_checkpoint()
 
-    with st.expander("4. Evidence Workbench", expanded=True):
+    with st.expander("B. Evidence Path - optional ACFR/API/OS validation", expanded=False):
+        st.caption("Use this only when you want to verify or replace values that already feed the rating path.")
+        st.markdown("**B1. Evidence Workbench**")
         _render_step_4_candidates(methodology_id)
 
-    with st.expander("5. AI Evidence Assist", expanded=True):
+        st.markdown("**B2. Selected-field AI assist**")
         _render_ai_evidence_assist(methodology_id)
 
-    with st.expander("6. Approval Decisions", expanded=True):
+    with st.expander("C. Publish Path - approve, apply, and export", expanded=False):
+        st.caption("Use this after evidence has been entered or AI has prefilled candidates.")
+        st.markdown("**C1. Approval Decisions**")
         approvals = _render_step_5_reconciliation(methodology_id)
 
-    with st.expander("7. Publish Outputs", expanded=False):
+        st.markdown("**C2. Apply approved values and export workpapers**")
         _render_step_6_publish(methodology_id, approvals)
 
 
