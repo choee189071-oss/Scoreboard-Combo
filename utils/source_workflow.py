@@ -45,6 +45,34 @@ SOURCE_SESSION_KEYS = {
 SOURCE_WORKFLOW_CACHE_VERSION = "direct-metrics-cache-v3"
 
 
+SOURCE_WORKFLOW_GUIDE: list[dict[str, str]] = [
+    {
+        "section": "Source uploads",
+        "what_it_does": "Registers files and extracts source candidates when the file is mappable.",
+        "when_to_use": "Start here for CreditScope workbook, ACFR, official statement/debt support, or IPEDS files.",
+        "what_it_does_not_do": "It does not select final issuer_data or run formulas by itself.",
+    },
+    {
+        "section": "API candidates",
+        "what_it_does": "Fetches Census and BEA candidate values for economy, population, income, and demographic fields.",
+        "when_to_use": "Use after deal setup when geography/year are known.",
+        "what_it_does_not_do": "Fetched API rows still need Save issuer_data before formulas can use them.",
+    },
+    {
+        "section": "Manual / source-pending inputs",
+        "what_it_does": "Lets the analyst type missing raw values and then saves the selected source candidates into issuer_data.",
+        "when_to_use": "Use after uploads/API fetches, especially when Blocking Required fields remain missing.",
+        "what_it_does_not_do": "Blank cells do not overwrite uploaded/API values.",
+    },
+    {
+        "section": "Source inventory readiness",
+        "what_it_does": "Shows extraction coverage for selected source rows.",
+        "when_to_use": "Use it to understand source inventory quality before Data Confirmation.",
+        "what_it_does_not_do": "This is not the final rating blocker list; Data Confirmation decides what actually blocks scoring.",
+    },
+]
+
+
 def _uploaded_file_payload(uploaded_file: Any) -> tuple[str, bytes]:
     name = str(getattr(uploaded_file, "name", "") or "uploaded_file")
     if hasattr(uploaded_file, "seek"):
@@ -465,6 +493,29 @@ def _readiness_tabs(source_report: pd.DataFrame) -> None:
                 st.dataframe(clean_for_display(frame), width="stretch", hide_index=True)
 
 
+def _uploaded_sources_summary() -> pd.DataFrame:
+    uploads = st.session_state.get("uploaded_sources", {}) or {}
+    rows: list[dict[str, Any]] = []
+    for source_slot, file_names in uploads.items():
+        if not str(file_names or "").strip():
+            continue
+        candidates = st.session_state.get("uploaded_source_candidates", {}).get(source_slot)
+        reports = st.session_state.get("uploaded_source_reports", {}).get(source_slot)
+        issuer_payload = st.session_state.get("uploaded_issuer_data", {}).get(source_slot, {}) or {}
+        issuer_data = issuer_payload.get("issuer_data", {}) if isinstance(issuer_payload, dict) else {}
+        rows.append(
+            {
+                "source_slot": source_slot,
+                "saved_files": file_names,
+                "mapped_fields": len(issuer_data) if isinstance(issuer_data, dict) else 0,
+                "candidate_rows": len(candidates) if isinstance(candidates, pd.DataFrame) else 0,
+                "diagnostic_rows": len(reports) if isinstance(reports, pd.DataFrame) else 0,
+                "session_status": "saved in session",
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def render_source_workflow(methodology_id: str) -> None:
     if st.session_state.get("source_methodology_id") != methodology_id:
         st.session_state["api_source_candidates"] = {}
@@ -497,9 +548,16 @@ def render_source_workflow(methodology_id: str) -> None:
     with top_cols[1]:
         st.caption("Reset only when changing issuer, methodology, or source workbook. Saved uploads stay in session until reset.")
 
+    with st.expander("What each Source Data section does", expanded=False):
+        st.dataframe(clean_for_display(pd.DataFrame(SOURCE_WORKFLOW_GUIDE)), width="stretch", hide_index=True)
+
     with st.container(border=True):
         st.markdown("**Source uploads**")
         st.caption("Upload source files for mapping or source QA. PDF support is available for ACFR and debt-support review.")
+        saved_uploads = _uploaded_sources_summary()
+        if not saved_uploads.empty:
+            st.success("Uploaded files are saved in this Streamlit session. Upload widgets may rerun the page, but these files remain available until Reset source session.")
+            st.dataframe(clean_for_display(saved_uploads), width="stretch", hide_index=True)
         source_options = [
             {
                 "key": "creditscope",
