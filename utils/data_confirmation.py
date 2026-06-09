@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
@@ -21,7 +22,7 @@ HUMAN_WORKFLOW_STEPS: List[Dict[str, str]] = [
     {
         "step": "2. Data Completeness Review",
         "human_action": "Resolve required fields marked Missing before evidence validation.",
-        "system_action": "Classify required fields as Complete, Needs Review, Missing, or Manual Override.",
+        "system_action": "Classify fields as Verified, Needs Review, Missing, or Optional.",
         "decision_output": "Completeness status",
     },
     {
@@ -412,13 +413,36 @@ APPROVAL_DECISIONS = [
 COMPLETENESS_STATUS_ORDER = {
     "Missing": 0,
     "Needs Review": 1,
-    "Manual Override": 2,
-    "Complete": 3,
+    "Verified": 2,
+    "Optional": 3,
 }
 
 VALIDATION_STATUS_OPTIONS = ["Verified", "Supported", "Needs Review", "Unverified"]
 EVIDENCE_STRENGTH_OPTIONS = ["Strong", "Medium", "Weak"]
 RECONCILIATION_ACTIONS = ["Accept System Value", "Replace With Evidence Value", "Send To Review"]
+FIELD_REVIEW_ACTIONS = [
+    "Accept current value",
+    "Replace with evidence value",
+    "Manually override",
+    "Mark as unavailable",
+    "Send to review later",
+]
+CONFIDENCE_OPTIONS = ["High", "Medium", "Low"]
+CONFIRMED_INPUT_COLUMNS = [
+    "issuer",
+    "fiscal_year",
+    "field_name",
+    "factor",
+    "confirmed_value",
+    "original_value",
+    "confirmed_source",
+    "source_type",
+    "evidence_note",
+    "confidence_score",
+    "status",
+    "status_reason",
+    "last_updated",
+]
 
 
 def _frame(rows: Iterable[Dict[str, Any]]) -> pd.DataFrame:
@@ -505,6 +529,108 @@ def _source_map_frame(registry: pd.DataFrame) -> pd.DataFrame:
 
 def _project_path(*parts: str) -> Path:
     return Path(__file__).resolve().parents[1].joinpath(*parts)
+
+
+def _confirmed_inputs_path() -> Path:
+    return _project_path("data", "confirmed_inputs.csv")
+
+
+def _current_issuer() -> str:
+    return str(st.session_state.get("issuer_name") or "").strip()
+
+
+def _current_fiscal_year() -> str:
+    return str(st.session_state.get("analysis_year") or "").strip()
+
+
+def _load_confirmed_inputs_file() -> pd.DataFrame:
+    path = _confirmed_inputs_path()
+    if not path.exists():
+        return pd.DataFrame(columns=CONFIRMED_INPUT_COLUMNS)
+    try:
+        frame = pd.read_csv(path)
+    except Exception:
+        return pd.DataFrame(columns=CONFIRMED_INPUT_COLUMNS)
+    for col in CONFIRMED_INPUT_COLUMNS:
+        if col not in frame.columns:
+            frame[col] = ""
+    return frame[CONFIRMED_INPUT_COLUMNS + [col for col in frame.columns if col not in CONFIRMED_INPUT_COLUMNS]]
+
+
+def _confirmed_inputs() -> pd.DataFrame:
+    frame = st.session_state.get("confirmed_inputs")
+    if isinstance(frame, pd.DataFrame):
+        return frame.copy()
+    frame = _load_confirmed_inputs_file()
+    st.session_state["confirmed_inputs"] = frame.copy()
+    return frame
+
+
+def _confirmed_inputs_for_context() -> pd.DataFrame:
+    frame = _confirmed_inputs()
+    if frame.empty:
+        return frame
+    issuer = _current_issuer()
+    fiscal_year = _current_fiscal_year()
+    mask = pd.Series(True, index=frame.index)
+    if issuer:
+        mask &= frame["issuer"].fillna("").astype(str).eq(issuer)
+    if fiscal_year:
+        mask &= frame["fiscal_year"].fillna("").astype(str).eq(fiscal_year)
+    out = frame[mask].copy()
+    if "last_updated" in out.columns:
+        out = out.sort_values("last_updated").drop_duplicates("field_name", keep="last")
+    return out.reset_index(drop=True)
+
+
+def _write_confirmed_inputs(frame: pd.DataFrame) -> None:
+    path = _confirmed_inputs_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    out = frame.copy()
+    for col in CONFIRMED_INPUT_COLUMNS:
+        if col not in out.columns:
+            out[col] = ""
+    out = out[CONFIRMED_INPUT_COLUMNS + [col for col in out.columns if col not in CONFIRMED_INPUT_COLUMNS]]
+    out.to_csv(path, index=False)
+    st.session_state["confirmed_inputs"] = out.copy()
+
+
+def _confirmed_value_lookup() -> dict[str, dict[str, Any]]:
+    confirmed = _confirmed_inputs_for_context()
+    if confirmed.empty or "field_name" not in confirmed.columns:
+        return {}
+    usable = confirmed[confirmed["status"].fillna("").astype(str).eq("Verified")].copy()
+    return {
+        str(row.get("field_name", "") or "").strip(): row.to_dict()
+        for _, row in usable.iterrows()
+        if str(row.get("field_name", "") or "").strip() and _has_value(row.get("confirmed_value"))
+    }
+
+
+def confirmed_inputs_to_issuer_data(methodology_id: str | None = None) -> dict[str, Any]:
+    """Return confirmed inputs for the current context as formula-ready issuer_data overrides."""
+    _ = methodology_id
+    return {
+        field: row.get("confirmed_value")
+        for field, row in _confirmed_value_lookup().items()
+        if _has_value(row.get("confirmed_value"))
+    }
+
+
+def apply_confirmed_inputs_to_issuer_data(
+    issuer_data: dict[str, Any] | None,
+    methodology_id: str | None = None,
+) -> tuple[dict[str, Any], pd.DataFrame]:
+    """Overlay confirmed_inputs.csv values on top of current issuer_data for formula/rating use."""
+    out = dict(issuer_data or {})
+    overrides = confirmed_inputs_to_issuer_data(methodology_id)
+    for field, value in overrides.items():
+        out[field] = value
+    confirmed = _confirmed_inputs_for_context()
+    if confirmed.empty:
+        return out, confirmed
+    confirmed = confirmed[confirmed["field_name"].astype(str).isin(overrides.keys())].copy()
+    return out, confirmed.reset_index(drop=True)
 
 
 def _load_data_dictionary() -> pd.DataFrame:
@@ -610,6 +736,46 @@ def _candidate_sources(field: str, candidates: pd.DataFrame) -> str:
     return "; ".join(dict.fromkeys(source for source in sources if source))
 
 
+def _candidate_field_names(candidates: pd.DataFrame) -> list[str]:
+    fields: set[str] = set()
+    if isinstance(candidates, pd.DataFrame) and not candidates.empty and "field_name" in candidates.columns:
+        fields.update(str(field).strip() for field in candidates["field_name"].dropna().astype(str) if str(field).strip())
+    source_report = st.session_state.get("source_report")
+    if isinstance(source_report, pd.DataFrame) and not source_report.empty and "field_name" in source_report.columns:
+        fields.update(str(field).strip() for field in source_report["field_name"].dropna().astype(str) if str(field).strip())
+    issuer_data = st.session_state.get("issuer_data", {}) or {}
+    if isinstance(issuer_data, dict):
+        fields.update(str(field).strip() for field in issuer_data if str(field).strip())
+    manual_values = st.session_state.get("manual_source_values", {}) or {}
+    if isinstance(manual_values, dict):
+        fields.update(str(field).strip() for field in manual_values if str(field).strip())
+    fields.update(_confirmed_value_lookup().keys())
+    return sorted(fields)
+
+
+def _candidate_value_summary(field: str, candidates: pd.DataFrame) -> dict[str, Any]:
+    if not isinstance(candidates, pd.DataFrame) or candidates.empty or "field_name" not in candidates.columns:
+        return {"candidate_values": "", "candidate_count": 0, "material_difference": False}
+    rows = candidates[candidates["field_name"].fillna("").astype(str).eq(field)].copy()
+    if rows.empty or "value" not in rows.columns:
+        return {"candidate_values": "", "candidate_count": 0, "material_difference": False}
+    values = [value for value in rows["value"].tolist() if _has_value(value)]
+    unique_display = list(dict.fromkeys(str(value) for value in values))
+    numeric_values = [_parse_float(value) for value in values]
+    numeric_values = [value for value in numeric_values if value is not None]
+    material_difference = False
+    if len(numeric_values) > 1:
+        spread = max(numeric_values) - min(numeric_values)
+        baseline = max(abs(numeric_values[0]), 1.0)
+        tolerance = FIELD_TOLERANCES.get(field, max(baseline * 0.01, 0.01))
+        material_difference = spread > tolerance
+    return {
+        "candidate_values": "; ".join(unique_display[:5]),
+        "candidate_count": len(unique_display),
+        "material_difference": material_difference,
+    }
+
+
 def _dependency_label(field: str) -> str:
     if field in DIRECT_METRIC_DEPENDENCIES:
         return "; ".join(DIRECT_METRIC_DEPENDENCIES[field])
@@ -667,7 +833,21 @@ def _selected_source_by_field() -> dict[str, pd.Series]:
     }
 
 
-def _source_value_row(field: str, selected_by_field: dict[str, pd.Series], candidates: pd.DataFrame) -> dict[str, Any]:
+def _source_value_row(
+    field: str,
+    selected_by_field: dict[str, pd.Series],
+    candidates: pd.DataFrame,
+    confirmed_by_field: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    if field in confirmed_by_field:
+        row = confirmed_by_field[field]
+        return {
+            "current_source_value": row.get("confirmed_value"),
+            "current_source": row.get("confirmed_source") or "confirmed_inputs.csv",
+            "source_status": "confirmed_input",
+            "source_value_origin": "confirmed_inputs",
+            "current_confidence": row.get("confidence_score", ""),
+        }
     if field in selected_by_field:
         row = selected_by_field[field]
         return {
@@ -675,6 +855,7 @@ def _source_value_row(field: str, selected_by_field: dict[str, pd.Series], candi
             "current_source": _source_detail(row),
             "source_status": str(row.get("readiness_status") or row.get("source_quality_status") or "").strip(),
             "source_value_origin": "selected_source_report",
+            "current_confidence": row.get("confidence", ""),
         }
     candidate = _first_candidate(field, candidates)
     if candidate is not None:
@@ -683,6 +864,7 @@ def _source_value_row(field: str, selected_by_field: dict[str, pd.Series], candi
             "current_source": _source_detail(candidate),
             "source_status": "candidate_available",
             "source_value_origin": "candidate_not_saved",
+            "current_confidence": candidate.get("confidence", ""),
         }
     manual_values = st.session_state.get("manual_source_values", {}) or {}
     if field in manual_values and str(manual_values[field]).strip() != "":
@@ -691,6 +873,7 @@ def _source_value_row(field: str, selected_by_field: dict[str, pd.Series], candi
             "current_source": "Manual: unsaved user input",
             "source_status": "manual_input",
             "source_value_origin": "manual_source_values",
+            "current_confidence": "",
         }
     if field in DIRECT_METRIC_FIELDS:
         debug_row = _direct_metric_debug_lookup().get(field, {})
@@ -701,6 +884,7 @@ def _source_value_row(field: str, selected_by_field: dict[str, pd.Series], candi
                 "current_source": debug_row.get("source_used") or "CreditScope workbook direct metric",
                 "source_status": "workbook_direct_metric",
                 "source_value_origin": "workbook_direct_metric_debug",
+                "current_confidence": "",
             }
         issuer_data = st.session_state.get("issuer_data", {}) or {}
         if field in issuer_data and _has_value(issuer_data[field]):
@@ -709,12 +893,14 @@ def _source_value_row(field: str, selected_by_field: dict[str, pd.Series], candi
                 "current_source": "issuer_data direct metric",
                 "source_status": "issuer_data_direct_metric",
                 "source_value_origin": "issuer_data",
+                "current_confidence": "",
             }
     return {
         "current_source_value": "",
         "current_source": "",
         "source_status": "missing",
         "source_value_origin": "no_candidate",
+        "current_confidence": "",
     }
 
 
@@ -723,21 +909,31 @@ def _base_check_rows(methodology_id: str) -> list[dict[str, Any]]:
     priority = _source_priority_lookup(methodology_id)
     candidates = _candidate_frames()
     selected_by_field = _selected_source_by_field()
+    confirmed_by_field = _confirmed_value_lookup()
+    required_fields = _required_source_fields(methodology_id)
+    optional_fields = [field for field in _candidate_field_names(candidates) if field not in set(required_fields)]
     rows: list[dict[str, Any]] = []
-    for field in _required_source_fields(methodology_id):
-        source_value = _source_value_row(field, selected_by_field, candidates)
+    for field in required_fields + optional_fields:
+        source_value = _source_value_row(field, selected_by_field, candidates, confirmed_by_field)
         priority_row = priority.get(field, {})
+        candidate_summary = _candidate_value_summary(field, candidates)
         rows.append(
             {
                 "factor": _field_factor(field, dictionary),
                 "field_name": field,
+                "required_status": "Required" if field in set(required_fields) else "Optional",
                 "data_stage": _field_stage(field),
                 "current_source_value": source_value["current_source_value"],
                 "current_source": source_value["current_source"],
                 "source_status": source_value["source_status"],
                 "source_value_origin": source_value["source_value_origin"],
+                "current_confidence": source_value.get("current_confidence", ""),
                 "candidate_sources": _candidate_sources(field, candidates),
+                "candidate_values": candidate_summary["candidate_values"],
+                "candidate_count": candidate_summary["candidate_count"],
+                "material_difference": candidate_summary["material_difference"],
                 "preferred_sources": str(priority_row.get("priority_sources") or "").strip(),
+                "min_confidence": priority_row.get("min_confidence", ""),
                 "formula_dependency": _dependency_label(field),
                 "evidence_target": _field_notes(field, dictionary),
                 "independent_value": "",
@@ -839,17 +1035,6 @@ def _confirmation_checks(methodology_id: str) -> pd.DataFrame:
     return base
 
 
-def _completeness_status(row: pd.Series) -> str:
-    source_status = str(row.get("source_status", "") or "")
-    if not _has_value(row.get("current_source_value")):
-        return "Missing"
-    if source_status == "manual_input":
-        return "Manual Override"
-    if source_status in {"candidate_available", "source_pending", "needs_review", "scorecard_implied", "missing"}:
-        return "Needs Review"
-    return "Complete"
-
-
 def _expected_source(row: pd.Series) -> str:
     for col in ["preferred_sources", "candidate_sources", "current_source"]:
         value = str(row.get(col, "") or "").strip()
@@ -858,14 +1043,134 @@ def _expected_source(row: pd.Series) -> str:
     return "Not configured"
 
 
+def _field_definition(field: str, dictionary: dict[str, dict[str, Any]] | None = None) -> str:
+    lookup = dictionary if dictionary is not None else _dictionary_lookup()
+    row = lookup.get(field, {})
+    note = str(row.get("notes") or "").strip()
+    return note or FIELD_EVIDENCE_HINTS.get(field, "") or "No field definition is configured yet."
+
+
+def _why_field_matters(row: pd.Series) -> str:
+    dependency = str(row.get("formula_dependency", "") or "").strip()
+    factor = str(row.get("factor", "") or "rating factor").strip()
+    if dependency:
+        return f"Feeds {dependency} in the {factor} factor."
+    return f"Supports the {factor} factor."
+
+
+def _suggested_search_terms(field: str, row: pd.Series) -> str:
+    terms = [field.replace("_", " ")]
+    evidence = str(row.get("evidence_target", "") or "")
+    expected = str(row.get("expected_source", "") or row.get("preferred_sources", "") or "")
+    if evidence:
+        terms.append(evidence.split(".")[0])
+    if expected and expected != "Not configured":
+        terms.append(expected.replace("|", " "))
+    return " | ".join(dict.fromkeys(term for term in terms if term))
+
+
+def _suggested_document_section(field: str, row: pd.Series) -> str:
+    text = " ".join([field, str(row.get("factor", "")), str(row.get("evidence_target", ""))]).lower()
+    if any(token in text for token in ["revenue", "expense", "expenditure", "transfer", "operating_margin"]):
+        return "ACFR Statement of Revenues, Expenses, and Changes in Net Position"
+    if any(token in text for token in ["fund_balance", "reserve", "liquidity"]):
+        return "ACFR Balance Sheet / Statistical Section"
+    if any(token in text for token in ["pension", "opeb", "liability"]):
+        return "Notes to Financial Statements"
+    if any(token in text for token in ["debt", "debt_service", "maturity"]):
+        return "Outstanding Debt Schedule / Official Statement"
+    if any(token in text for token in ["population", "income", "gdp", "economy"]):
+        return "Census / BEA external source"
+    return "Manual Entry"
+
+
+def _confidence_value(row: pd.Series) -> float | None:
+    return _parse_float(row.get("current_confidence"))
+
+
+def _min_confidence(row: pd.Series) -> float | None:
+    return _parse_float(row.get("min_confidence"))
+
+
+def _value_format_reason(value: Any) -> str:
+    if not _has_value(value):
+        return ""
+    text = str(value).strip()
+    numeric = _parse_float(value)
+    if numeric is None:
+        return "Value format appears abnormal or non-numeric"
+    if numeric < 0:
+        return "Negative value requires confirmation"
+    if numeric == 0:
+        return "Value is zero and requires confirmation"
+    if ";" in text:
+        return "Multiple period values detected; confirm the intended year or average"
+    return ""
+
+
+def _status_reason(row: pd.Series) -> str:
+    required_status = str(row.get("required_status", "Required") or "Required")
+    current_value = row.get("current_source_value")
+    source_status = str(row.get("source_status", "") or "")
+    if required_status == "Optional":
+        return "Optional field is not required for the current rating methodology."
+    if not _has_value(current_value):
+        return "Required field has no current value."
+    reasons: list[str] = []
+    if bool(row.get("material_difference", False)):
+        reasons.append(f"Multiple values detected: {row.get('candidate_values', '')}")
+    confidence = _confidence_value(row)
+    min_confidence = _min_confidence(row)
+    if confidence is not None and min_confidence is not None and confidence < min_confidence:
+        reasons.append(f"Source confidence {confidence:g} is below threshold {min_confidence:g}")
+    if not str(row.get("preferred_sources", "") or "").strip():
+        reasons.append("Expected source is not configured")
+    if source_status == "manual_input" and not _has_value(row.get("independent_value")):
+        reasons.append("Value is manually entered without evidence")
+    if source_status == "candidate_available":
+        reasons.append("Value is available as a candidate but has not been selected into issuer_data")
+    if source_status in {"source_pending", "needs_review", "scorecard_implied", "missing"}:
+        reasons.append(f"Current source status is {source_status}")
+    format_reason = _value_format_reason(current_value)
+    if format_reason:
+        reasons.append(format_reason)
+    if reasons:
+        return "; ".join(dict.fromkeys(reason for reason in reasons if reason))
+    return "Value has an acceptable source and no rule-based exceptions were detected."
+
+
+def _completeness_status(row: pd.Series) -> str:
+    if str(row.get("required_status", "Required") or "Required") == "Optional":
+        return "Optional"
+    if not _has_value(row.get("current_source_value")):
+        return "Missing"
+    reason = _status_reason(row)
+    if reason != "Value has an acceptable source and no rule-based exceptions were detected.":
+        return "Needs Review"
+    return "Verified"
+
+
 def _completeness_frame(methodology_id: str) -> pd.DataFrame:
     checks = _confirmation_checks(methodology_id).copy()
     if checks.empty:
         return checks
     checks["expected_source"] = checks.apply(_expected_source, axis=1)
+    checks["suggested_search_terms"] = checks.apply(lambda row: _suggested_search_terms(str(row.get("field_name", "")), row), axis=1)
+    checks["suggested_document_section"] = checks.apply(lambda row: _suggested_document_section(str(row.get("field_name", "")), row), axis=1)
+    checks["status_reason"] = checks.apply(_status_reason, axis=1)
     checks["current_status"] = checks.apply(_completeness_status, axis=1)
     checks["status_rank"] = checks["current_status"].map(COMPLETENESS_STATUS_ORDER).fillna(9)
-    return checks.sort_values(["status_rank", "factor", "field_name"]).reset_index(drop=True)
+    checks["priority_rank"] = checks.apply(
+        lambda row: 0
+        if row.get("required_status") == "Required" and row.get("current_status") == "Missing"
+        else 1
+        if row.get("required_status") == "Required" and row.get("current_status") == "Needs Review"
+        else 2
+        if row.get("required_status") == "Optional" and not _has_value(row.get("current_source_value"))
+        else 3,
+        axis=1,
+    )
+    return checks.sort_values(["priority_rank", "status_rank", "factor", "field_name"]).reset_index(drop=True)
 
 
 def _difference_pct(system_value: Any, evidence_value: Any) -> float | None:
@@ -895,6 +1200,104 @@ def _validation_status(field: str, system_value: Any, evidence_value: Any, saved
     if abs_diff <= max(tolerance * 3, abs(system) * 0.02):
         return "Supported"
     return "Needs Review"
+
+
+def _confidence_score(label: str) -> float:
+    return {"High": 0.95, "Medium": 0.75, "Low": 0.45}.get(str(label), 0.75)
+
+
+def _evidence_support(row: pd.Series, evidence_note: Any = "", confirmed_value: Any = "") -> tuple[str, str, float]:
+    note = str(evidence_note or row.get("review_note", "") or "").strip()
+    source = str(row.get("independent_source", "") or row.get("evidence_source", "") or "").strip()
+    value = confirmed_value if _has_value(confirmed_value) else row.get("independent_value")
+    if not source and not note:
+        return "Unsupported", "No evidence source or evidence note has been entered.", 0.0
+    source_text = " ".join([source, note]).lower()
+    field_tokens = [token for token in str(row.get("field_name", "")).lower().split("_") if len(token) > 2]
+    keyword_hit = any(token in source_text for token in field_tokens)
+    if _has_value(value) and keyword_hit:
+        return "Supported", "Evidence note/source contains relevant keywords and a proposed value is present.", 0.9
+    if _has_value(value) or source:
+        return "Weak Support", "Evidence is present but keyword/value support is incomplete.", 0.6
+    return "Unsupported", "Evidence does not support a usable value yet.", 0.2
+
+
+def _confirmed_row_from_action(
+    row: pd.Series,
+    action: str,
+    confirmed_value: Any,
+    source_note: str,
+    evidence_note: str,
+    confidence_label: str,
+) -> dict[str, Any]:
+    current_value = row.get("current_source_value")
+    if action == "Accept current value":
+        final_value = current_value
+        source = str(row.get("current_source", "") or source_note or "").strip()
+        status = "Verified" if _has_value(final_value) else "Missing"
+        reason = "Analyst accepted the current system value." if _has_value(final_value) else "Current value is unavailable."
+    elif action in {"Replace with evidence value", "Manually override"}:
+        final_value = confirmed_value
+        source = source_note or str(row.get("evidence_source", "") or row.get("independent_source", "") or "Manual Entry")
+        status = "Verified" if _has_value(final_value) and confidence_label != "Low" else "Needs Review"
+        reason = "Analyst confirmed a replacement value." if action == "Replace with evidence value" else "Analyst manually overrode the value."
+    elif action == "Mark as unavailable":
+        final_value = ""
+        source = source_note or "Unavailable"
+        status = "Missing"
+        reason = "Analyst marked this required value as unavailable."
+    else:
+        final_value = confirmed_value if _has_value(confirmed_value) else current_value
+        source = source_note or str(row.get("current_source", "") or "Review Queue")
+        status = "Needs Review"
+        reason = "Analyst sent this field to review later."
+
+    evidence_status, evidence_reason, evidence_score = _evidence_support(row, evidence_note, final_value)
+    confidence_score = min(_confidence_score(confidence_label), evidence_score if evidence_status != "Unsupported" else _confidence_score(confidence_label))
+    if status == "Verified" and evidence_status == "Unsupported" and action != "Accept current value":
+        status = "Needs Review"
+        reason = f"{reason} Evidence support is currently unsupported."
+    return {
+        "issuer": _current_issuer(),
+        "fiscal_year": _current_fiscal_year(),
+        "field_name": str(row.get("field_name", "") or "").strip(),
+        "factor": str(row.get("factor", "") or "").strip(),
+        "confirmed_value": final_value,
+        "original_value": current_value,
+        "confirmed_source": source,
+        "source_type": _source_name_from_text(source, fallback="Manual"),
+        "evidence_note": evidence_note,
+        "confidence_score": confidence_score,
+        "status": status,
+        "status_reason": f"{reason} Evidence Status: {evidence_status}. {evidence_reason}",
+        "last_updated": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _save_confirmed_field(row: pd.Series, confirmed_row: dict[str, Any]) -> None:
+    existing = _confirmed_inputs()
+    field = str(confirmed_row.get("field_name", "") or "").strip()
+    issuer = str(confirmed_row.get("issuer", "") or "").strip()
+    fiscal_year = str(confirmed_row.get("fiscal_year", "") or "").strip()
+    if not existing.empty:
+        keep = ~(
+            existing["issuer"].fillna("").astype(str).eq(issuer)
+            & existing["fiscal_year"].fillna("").astype(str).eq(fiscal_year)
+            & existing["field_name"].fillna("").astype(str).eq(field)
+        )
+        existing = existing[keep].copy()
+    updated = pd.concat([existing, pd.DataFrame([confirmed_row])], ignore_index=True, sort=False)
+    _write_confirmed_inputs(updated)
+
+    checks = _confirmation_checks(st.session_state.get("methodology_id", "moodys_ccd_go")).copy()
+    if not checks.empty and "field_name" in checks.columns:
+        mask = checks["field_name"].astype(str).eq(field)
+        if mask.any():
+            checks.loc[mask, "independent_value"] = confirmed_row.get("confirmed_value", "")
+            checks.loc[mask, "independent_source"] = confirmed_row.get("confirmed_source", "")
+            checks.loc[mask, "review_note"] = confirmed_row.get("evidence_note", "")
+            checks.loc[mask, "evidence_source"] = confirmed_row.get("confirmed_source", "")
+        st.session_state["data_confirmation_checks"] = checks
 
 
 def _evidence_source_label(row: pd.Series) -> str:
@@ -977,6 +1380,10 @@ def _evidence_validation_frame(methodology_id: str) -> pd.DataFrame:
     )
     checks["evidence_strength"] = checks.apply(_evidence_strength, axis=1)
     checks["review_notes"] = checks["review_note"]
+    support = checks.apply(lambda row: _evidence_support(row, row.get("review_notes"), row.get("evidence_value")), axis=1)
+    checks["evidence_status"] = [item[0] for item in support]
+    checks["evidence_reason"] = [item[1] for item in support]
+    checks["confidence_score"] = [item[2] for item in support]
     status_rank = {"Needs Review": 0, "Unverified": 1, "Supported": 2, "Verified": 3}
     checks["validation_rank"] = checks["validation_status"].map(status_rank).fillna(9)
     return checks.sort_values(["validation_rank", "factor", "field_name"]).reset_index(drop=True)
@@ -986,13 +1393,28 @@ def evidence_confidence_metrics(methodology_id: str | None = None) -> dict[str, 
     methodology = methodology_id or st.session_state.get("methodology_id", "moodys_ccd_go")
     completeness = _completeness_frame(methodology)
     evidence = _evidence_validation_frame(methodology)
-    required_count = int(len(completeness)) if isinstance(completeness, pd.DataFrame) else 0
+    required = (
+        completeness[completeness["required_status"].astype(str).eq("Required")].copy()
+        if isinstance(completeness, pd.DataFrame) and not completeness.empty and "required_status" in completeness.columns
+        else pd.DataFrame()
+    )
+    required_count = int(len(required))
     missing_count = (
-        int(completeness["current_status"].astype(str).eq("Missing").sum())
-        if isinstance(completeness, pd.DataFrame) and not completeness.empty and "current_status" in completeness.columns
+        int(required["current_status"].astype(str).eq("Missing").sum())
+        if not required.empty and "current_status" in required.columns
         else 0
     )
-    data_completeness = ((required_count - missing_count) / required_count * 100) if required_count else 0.0
+    needs_review_count = (
+        int(required["current_status"].astype(str).eq("Needs Review").sum())
+        if not required.empty and "current_status" in required.columns
+        else 0
+    )
+    verified_required = (
+        int(required["current_status"].astype(str).eq("Verified").sum())
+        if not required.empty and "current_status" in required.columns
+        else 0
+    )
+    data_completeness = (verified_required / required_count * 100) if required_count else 0.0
     evidence_count = int(len(evidence)) if isinstance(evidence, pd.DataFrame) else 0
     supported_statuses = {"Verified", "Supported", "Needs Review"}
     evidence_supported = (
@@ -1009,11 +1431,13 @@ def evidence_confidence_metrics(methodology_id: str | None = None) -> dict[str, 
     return {
         "required_fields": required_count,
         "missing_fields": missing_count,
+        "needs_review_fields": needs_review_count,
         "data_completeness_pct": data_completeness,
         "evidence_required_fields": evidence_count,
         "evidence_supported_fields": evidence_supported,
         "evidence_coverage_pct": evidence_coverage,
-        "verified_fields": verified_count,
+        "verified_fields": verified_required,
+        "evidence_verified_fields": verified_count,
         "verified_denominator": required_count,
     }
 
@@ -1043,43 +1467,154 @@ def _render_step_3_source_map(registry: pd.DataFrame) -> None:
     st.dataframe(clean_for_display(source_map), width="stretch", hide_index=True)
 
 
+def _queue_display(frame: pd.DataFrame) -> pd.DataFrame:
+    cols = [
+        "field_name",
+        "factor",
+        "required_status",
+        "expected_source",
+        "current_status",
+        "status_reason",
+        "suggested_search_terms",
+        "suggested_document_section",
+        "current_source_value",
+        "current_source",
+    ]
+    return clean_for_display(frame[[col for col in cols if col in frame.columns]]).rename(
+        columns={
+            "field_name": "Field",
+            "factor": "Factor",
+            "required_status": "Required / Optional",
+            "expected_source": "Expected Source",
+            "current_status": "Current Status",
+            "status_reason": "Status Reason",
+            "suggested_search_terms": "Suggested Search Terms",
+            "suggested_document_section": "Suggested Document Section",
+            "current_source_value": "Current Value",
+            "current_source": "Current Source",
+        }
+    )
+
+
+def _render_field_review_panels(frame: pd.DataFrame, title: str) -> None:
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        st.info(f"No {title.lower()} fields need action.")
+        return
+    dictionary = _dictionary_lookup()
+    for _, row in frame.iterrows():
+        field = str(row.get("field_name", "") or "").strip()
+        if not field:
+            continue
+        status = str(row.get("current_status", "") or "")
+        expander_label = f"{field} - {status}"
+        with st.expander(expander_label, expanded=False):
+            cols = st.columns(2)
+            cols[0].markdown(f"**Field Name**  \n{field}")
+            cols[1].markdown(f"**Factor / Category**  \n{row.get('factor', '')}")
+            st.markdown(f"**Definition**  \n{_field_definition(field, dictionary)}")
+            st.markdown(f"**Why this field matters**  \n{_why_field_matters(row)}")
+            detail_cols = st.columns(2)
+            detail_cols[0].markdown(f"**Expected Source**  \n{row.get('expected_source', '')}")
+            detail_cols[1].markdown(f"**Suggested Section**  \n{row.get('suggested_document_section', '')}")
+            st.markdown(f"**Current Value**  \n{row.get('current_source_value', '') or 'Missing'}")
+            st.markdown(f"**Current Source**  \n{row.get('current_source', '') or 'Not available'}")
+            st.markdown(f"**Status Reason**  \n{row.get('status_reason', '')}")
+            st.markdown(f"**Suggested Search Terms**  \n{row.get('suggested_search_terms', '')}")
+
+            clean_field = re.sub(r"[^A-Za-z0-9_]+", "_", field)
+            default_value = row.get("independent_value") if _has_value(row.get("independent_value")) else row.get("current_source_value")
+            action_default = 1 if status == "Missing" else 0
+            with st.form(f"field_review_form_{clean_field}"):
+                action = st.selectbox(
+                    "Action",
+                    FIELD_REVIEW_ACTIONS,
+                    index=action_default,
+                    key=f"field_review_action_{clean_field}",
+                )
+                evidence_note = st.text_area(
+                    "Evidence Input Box",
+                    value=str(row.get("review_note", "") or ""),
+                    key=f"field_review_evidence_{clean_field}",
+                )
+                confirmed_value = st.text_input(
+                    "Confirmed Value",
+                    value="" if default_value is None else str(default_value),
+                    key=f"field_review_value_{clean_field}",
+                )
+                source_note = st.text_input(
+                    "Source Note",
+                    value=str(row.get("independent_source", "") or row.get("current_source", "") or ""),
+                    key=f"field_review_source_{clean_field}",
+                )
+                confidence = st.selectbox(
+                    "Confidence",
+                    CONFIDENCE_OPTIONS,
+                    index=1,
+                    key=f"field_review_confidence_{clean_field}",
+                )
+                if st.form_submit_button("Save confirmed input", type="primary"):
+                    confirmed_row = _confirmed_row_from_action(
+                        row,
+                        action,
+                        confirmed_value,
+                        source_note,
+                        evidence_note,
+                        confidence,
+                    )
+                    _save_confirmed_field(row, confirmed_row)
+                    st.session_state["data_confirmation_save_notice"] = f"Saved confirmed input for {field}."
+                    st.rerun()
+
+
 def _render_data_completeness_review(methodology_id: str) -> pd.DataFrame:
     completeness = _completeness_frame(methodology_id)
     if completeness.empty:
         st.info("No required-field list is available for this methodology yet.")
         return completeness
 
-    counts = completeness["current_status"].value_counts().to_dict()
-    cols = st.columns(4)
-    cols[0].metric("Required Fields", len(completeness))
-    cols[1].metric("Auto Filled", int(counts.get("Complete", 0)))
-    cols[2].metric("Needs Review", int(counts.get("Needs Review", 0)))
-    cols[3].metric("Missing", int(counts.get("Missing", 0)))
+    required = completeness[completeness["required_status"].astype(str).eq("Required")].copy()
+    counts = required["current_status"].value_counts().to_dict() if not required.empty else {}
+    verified = int(counts.get("Verified", 0))
+    needs_review = int(counts.get("Needs Review", 0))
+    missing = int(counts.get("Missing", 0))
+    completion_rate = (verified / len(required) * 100) if len(required) else 0.0
 
-    display_cols = [
-        "field_name",
-        "factor",
-        "expected_source",
-        "current_status",
-        "current_source_value",
-        "current_source",
-        "formula_dependency",
-    ]
-    st.dataframe(
-        clean_for_display(completeness[[col for col in display_cols if col in completeness.columns]]).rename(
-            columns={
-                "field_name": "Field",
-                "factor": "Factor",
-                "expected_source": "Expected Source",
-                "current_status": "Current Status",
-                "current_source_value": "Current Value",
-                "current_source": "Current Source",
-                "formula_dependency": "Used By",
-            }
-        ),
-        width="stretch",
-        hide_index=True,
-    )
+    cols = st.columns(5)
+    cols[0].metric("Required Fields", len(required))
+    cols[1].metric("Verified", verified)
+    cols[2].metric("Needs Review", needs_review)
+    cols[3].metric("Missing", missing)
+    cols[4].metric("Completion Rate", f"{completion_rate:.0f}%")
+
+    missing_df = completeness[
+        completeness["required_status"].astype(str).eq("Required")
+        & completeness["current_status"].astype(str).eq("Missing")
+    ].copy()
+    review_df = completeness[
+        completeness["required_status"].astype(str).eq("Required")
+        & completeness["current_status"].astype(str).eq("Needs Review")
+    ].copy()
+    verified_df = completeness[
+        completeness["required_status"].astype(str).eq("Required")
+        & completeness["current_status"].astype(str).eq("Verified")
+    ].copy()
+    optional_df = completeness[completeness["required_status"].astype(str).eq("Optional")].copy()
+
+    st.markdown("**Priority Review Queue**")
+    tabs = st.tabs(["Missing", "Needs Review", "Verified", "Optional"])
+    for tab, label, frame in [
+        (tabs[0], "Missing", missing_df),
+        (tabs[1], "Needs Review", review_df),
+        (tabs[2], "Verified", verified_df),
+        (tabs[3], "Optional", optional_df),
+    ]:
+        with tab:
+            if frame.empty:
+                st.info(f"No {label.lower()} fields.")
+            else:
+                st.dataframe(_queue_display(frame), width="stretch", hide_index=True)
+            if label in {"Missing", "Needs Review"}:
+                _render_field_review_panels(frame, label)
     return completeness
 
 
@@ -1088,7 +1623,7 @@ def _render_metric_calculation_checkpoint() -> None:
     if not isinstance(formula_results, pd.DataFrame) or formula_results.empty:
         formula_results = st.session_state.get("formula_results", pd.DataFrame())
     if not isinstance(formula_results, pd.DataFrame) or formula_results.empty:
-        st.info("No formula results yet. Complete source fields, then run formulas in the main Workflow page.")
+        st.info("No formula results yet. Resolve required fields, then run formulas in the main Workflow page.")
         return
     counts = formula_results["status"].fillna("unknown").astype(str).value_counts().to_dict() if "status" in formula_results.columns else {}
     cols = st.columns(4)
@@ -1117,13 +1652,13 @@ def _render_step_4_candidates(methodology_id: str) -> None:
     )
     if missing_count:
         st.warning(f"{missing_count} required fields are still missing. Evidence validation below only covers fields that already have a system value.")
-    counts = evidence["validation_status"].value_counts().to_dict()
+    counts = evidence["evidence_status"].value_counts().to_dict()
     cols = st.columns(4)
     cols[0].metric("Evidence Fields", len(evidence))
-    cols[1].metric("Verified", int(counts.get("Verified", 0)))
-    cols[2].metric("Supported", int(counts.get("Supported", 0)))
-    cols[3].metric("Unverified", int(counts.get("Unverified", 0)))
-    st.caption("Evidence Validation only evaluates fields that already have a system value. Missing values belong in Data Completeness Review.")
+    cols[1].metric("Supported", int(counts.get("Supported", 0)))
+    cols[2].metric("Weak Support", int(counts.get("Weak Support", 0)))
+    cols[3].metric("Unsupported", int(counts.get("Unsupported", 0)))
+    st.caption("Evidence Validation supports the field review workflow. It checks whether a proposed value has adequate source support.")
     editable_cols = [
         "factor",
         "field_name",
@@ -1136,6 +1671,9 @@ def _render_step_4_candidates(methodology_id: str) -> None:
         "difference_pct",
         "validation_status",
         "evidence_strength",
+        "evidence_status",
+        "evidence_reason",
+        "confidence_score",
         "review_notes",
     ]
     with st.form("data_confirmation_candidate_form"):
@@ -1163,6 +1701,9 @@ def _render_step_4_candidates(methodology_id: str) -> None:
                     "Evidence Strength",
                     options=EVIDENCE_STRENGTH_OPTIONS,
                 ),
+                "evidence_status": st.column_config.TextColumn("Evidence Status", disabled=True),
+                "evidence_reason": st.column_config.TextColumn("Evidence Reason", disabled=True),
+                "confidence_score": st.column_config.NumberColumn("Confidence Score", disabled=True, format="%.2f"),
                 "review_notes": st.column_config.TextColumn("Review Notes"),
             },
         )
@@ -1330,9 +1871,30 @@ def _render_step_5_reconciliation(methodology_id: str) -> pd.DataFrame:
 def _render_step_6_publish(methodology_id: str, approvals: pd.DataFrame) -> None:
     metrics = evidence_confidence_metrics(methodology_id)
     cols = st.columns(3)
-    cols[0].metric("Data Completeness", f"{metrics['data_completeness_pct']:.0f}%")
+    cols[0].metric("Completion Rate", f"{metrics['data_completeness_pct']:.0f}%")
     cols[1].metric("Evidence Coverage", f"{metrics['evidence_coverage_pct']:.0f}%")
     cols[2].metric("Verified Fields", f"{metrics['verified_fields']} / {metrics['verified_denominator']}")
+
+    confirmed = _confirmed_inputs_for_context()
+    st.markdown("**Confirmed Output Preview**")
+    if confirmed.empty:
+        st.info("No confirmed inputs have been saved for this issuer/year yet.")
+    else:
+        st.caption(f"Rating Engine input source: `{_confirmed_inputs_path()}`")
+        st.dataframe(clean_for_display(confirmed), width="stretch", hide_index=True)
+        st.download_button(
+            "Export Review Report",
+            data=confirmed.to_csv(index=False).encode("utf-8"),
+            file_name="confirmed_inputs_review_report.csv",
+            mime="text/csv",
+        )
+
+    action_cols = st.columns(2)
+    if action_cols[0].button("Save Confirmed Inputs", type="primary"):
+        _write_confirmed_inputs(_confirmed_inputs())
+        st.success("confirmed_inputs.csv saved.")
+    if action_cols[1].button("Recalculate Status"):
+        st.rerun()
 
     approved = approvals if isinstance(approvals, pd.DataFrame) and not approvals.empty else st.session_state.get("data_confirmation_approvals")
     if not isinstance(approved, pd.DataFrame) or approved.empty:
@@ -1406,9 +1968,12 @@ def _render_human_workflow_cards() -> None:
 
 
 def render_data_confirmation_workflow(methodology_id: str) -> None:
-    st.caption("Evidence & Reconciliation separates missing-data cleanup from documentary validation, then carries approved trust labels into rating outputs.")
+    notice = st.session_state.pop("data_confirmation_save_notice", None)
+    if notice:
+        st.success(notice)
+    st.caption("Operational validation workflow: classify required fields, resolve missing/review queues, save confirmed_inputs.csv, then run formulas from confirmed values.")
 
-    tabs = st.tabs(["Verification workflow", "File registry", "Field checklist", "Status definitions"])
+    tabs = st.tabs(["Operational workflow", "File registry", "Field checklist", "Status definitions"])
     with tabs[0]:
         _render_human_workflow_cards()
         with st.expander("View workflow as table", expanded=False):

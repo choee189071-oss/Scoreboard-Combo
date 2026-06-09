@@ -14,7 +14,7 @@ from engine.calculator_engine import calculate_all_formulas
 from engine.factor_engine import load_factor_template
 from engine.rating_audit import build_rating_audit_trail
 from engine.rating_engine import run_rating_engine, summarize_rating_output
-from utils.data_confirmation import evidence_confidence_metrics
+from utils.data_confirmation import apply_confirmed_inputs_to_issuer_data, evidence_confidence_metrics
 from utils.manual_scores import render_manual_score_editor
 from utils.source_workflow import (
     _direct_metric_debug_frame,
@@ -283,7 +283,11 @@ with st.container(border=True):
             direct_metric_overrides = _workbook_direct_metric_overrides(methodology_id)
             for field, item in direct_metric_overrides.items():
                 formula_issuer_data[field] = item.get("workbook_value")
-            if direct_metric_overrides:
+            formula_issuer_data, confirmed_formula_inputs = apply_confirmed_inputs_to_issuer_data(
+                formula_issuer_data,
+                methodology_id,
+            )
+            if direct_metric_overrides or not confirmed_formula_inputs.empty:
                 st.session_state["issuer_data"] = formula_issuer_data
                 st.session_state["workbook_direct_metric_debug"] = _direct_metric_debug_frame(
                     direct_metric_overrides,
@@ -306,6 +310,9 @@ with st.container(border=True):
                         width="stretch",
                         hide_index=True,
                     )
+            if not confirmed_formula_inputs.empty:
+                with st.expander("Confirmed inputs applied to formula engine", expanded=True):
+                    st.dataframe(clean_for_display(confirmed_formula_inputs), width="stretch", hide_index=True)
             st.success(f"Saved {len(formula_results)} formula results.")
         except Exception as exc:
             st.error("Could not run formulas from issuer_data.")

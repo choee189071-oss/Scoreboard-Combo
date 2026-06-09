@@ -18,12 +18,12 @@ init_state()
 
 page_header(
     "Data Confirmation",
-    "Evidence and reconciliation workspace for data completeness, documentary support, analyst approval, and final rating confidence.",
+    "Operational validation workflow for missing fields, evidence entry, confirmed values, and clean rating-engine inputs.",
     "data_confirmation",
 )
 current_context_card()
 
-st.info("Use this as the trust layer: resolve missing required fields first, calculate metrics, then validate existing system values against ACFR or other support before approving outputs.")
+st.info("Use this before scoring: resolve Missing and Needs Review fields, save confirmed inputs, then run formulas from data/confirmed_inputs.csv-backed values.")
 st.page_link("streamlit_app.py", label="Open Workflow")
 
 render_data_confirmation_workflow(st.session_state.get("methodology_id", "moodys_ccd_go"))
