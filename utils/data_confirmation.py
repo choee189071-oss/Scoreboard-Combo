@@ -32,15 +32,15 @@ HUMAN_WORKFLOW_STEPS: List[Dict[str, str]] = [
         "decision_output": "System values",
     },
     {
-        "step": "4. Evidence Validation",
-        "human_action": "Validate existing system values against ACFR, OS, API, or other support.",
-        "system_action": "Evaluate only fields that already have a system value.",
-        "decision_output": "Evidence status",
+        "step": "4. Evidence Workbench",
+        "human_action": "Add independent evidence only for fields you want to validate or replace.",
+        "system_action": "Keep blank evidence as Awaiting Evidence, not as a review problem.",
+        "decision_output": "Evidence result",
     },
     {
-        "step": "5. Reconciliation & Approval",
-        "human_action": "Accept system value, replace with evidence value, or send to review.",
-        "system_action": "Store analyst decision and approved value for downstream use.",
+        "step": "5. Approval Decisions",
+        "human_action": "Approve only rows with entered evidence or a real variance/review issue.",
+        "system_action": "Carry approved values forward and leave untouched rows out of the review queue.",
         "decision_output": "Approved value",
     },
     {
@@ -175,9 +175,14 @@ APPROVAL_STATUS_RULES: List[Dict[str, str]] = [
         "next_action": "Send to analyst review before publishing.",
     },
     {
+        "status": "Awaiting Evidence",
+        "meaning": "No independent evidence has been entered yet; this is a work queue state, not an error.",
+        "next_action": "Enter ACFR/API/OS support if this field needs validation.",
+    },
+    {
         "status": "Unverified",
-        "meaning": "No supporting evidence has been located for the system value.",
-        "next_action": "Locate support or keep the value explicitly unverified.",
+        "meaning": "Legacy label for a row with no supporting evidence.",
+        "next_action": "Treat as Awaiting Evidence unless an analyst explicitly sends it to review.",
     },
     {
         "status": "Strong",
@@ -443,9 +448,9 @@ REQUIREMENT_CLASS_ORDER = {
     "Optional / Contextual": 2,
 }
 
-VALIDATION_STATUS_OPTIONS = ["Verified", "Supported", "Needs Review", "Unverified"]
-EVIDENCE_STRENGTH_OPTIONS = ["Strong", "Medium", "Weak"]
-RECONCILIATION_ACTIONS = ["Accept System Value", "Replace With Evidence Value", "Send To Review"]
+VALIDATION_STATUS_OPTIONS = ["Awaiting Evidence", "Verified", "Supported", "Needs Review", "Unverified"]
+EVIDENCE_STRENGTH_OPTIONS = ["Not Entered", "Strong", "Medium", "Weak"]
+RECONCILIATION_ACTIONS = ["Await Evidence", "Accept System Value", "Replace With Evidence Value", "Send To Review"]
 FIELD_REVIEW_ACTIONS = [
     "Accept current value",
     "Replace with evidence value",
@@ -1381,10 +1386,10 @@ def _difference_pct(system_value: Any, evidence_value: Any) -> float | None:
 
 def _validation_status(field: str, system_value: Any, evidence_value: Any, saved_status: Any = "") -> str:
     saved = str(saved_status or "").strip()
-    if saved in VALIDATION_STATUS_OPTIONS and saved != "Unverified":
+    if saved in VALIDATION_STATUS_OPTIONS and saved not in {"Unverified", "Awaiting Evidence"}:
         return saved
     if not _has_value(evidence_value):
-        return "Unverified"
+        return "Awaiting Evidence"
     system = _parse_float(system_value)
     evidence = _parse_float(evidence_value)
     if system is None or evidence is None:
@@ -1407,7 +1412,7 @@ def _evidence_support(row: pd.Series, evidence_note: Any = "", confirmed_value: 
     source = str(row.get("independent_source", "") or row.get("evidence_source", "") or "").strip()
     value = confirmed_value if _has_value(confirmed_value) else row.get("independent_value")
     if not source and not note:
-        return "Unsupported", "No evidence source or evidence note has been entered.", 0.0
+        return "Awaiting Evidence", "No independent evidence has been entered yet.", 0.0
     source_text = " ".join([source, note]).lower()
     field_tokens = [token for token in str(row.get("field_name", "")).lower().split("_") if len(token) > 2]
     keyword_hit = any(token in source_text for token in field_tokens)
@@ -1519,6 +1524,8 @@ def _evidence_strength(row: pd.Series) -> str:
     explicit = str(row.get("evidence_strength", "") or "").strip()
     if explicit in EVIDENCE_STRENGTH_OPTIONS:
         return explicit
+    if not _has_evidence_entered(row):
+        return "Not Entered"
     evidence_source = _evidence_source_label(row).lower()
     line_item = str(row.get("independent_source", "") or "").lower()
     if "acfr" in evidence_source or "note" in line_item or "statement" in line_item:
@@ -1530,6 +1537,8 @@ def _evidence_strength(row: pd.Series) -> str:
 
 def _evidence_relevant(row: pd.Series) -> bool:
     if not _has_value(row.get("current_source_value")):
+        return False
+    if str(row.get("requirement_class", "") or "").strip() == "Optional / Contextual":
         return False
     field = str(row.get("field_name", "") or "")
     factor = str(row.get("factor", "") or "")
@@ -1547,6 +1556,29 @@ def _evidence_relevant(row: pd.Series) -> bool:
     return factor in {"Financial Performance", "Reserves and Liquidity", "Debt & Liabilities", "Pension", "OPEB"}
 
 
+def _has_evidence_entered(row: pd.Series | dict[str, Any]) -> bool:
+    evidence_cols = [
+        "independent_value",
+        "independent_source",
+        "evidence_value",
+        "evidence_source",
+        "evidence_page",
+        "evidence_line_item",
+        "review_note",
+        "review_notes",
+        "citation",
+    ]
+    return any(_has_value(row.get(col)) for col in evidence_cols)
+
+
+def _evidence_role(row: pd.Series) -> str:
+    if str(row.get("data_stage", "") or "") == "direct_metric_candidate":
+        return "Scoring metric"
+    if str(row.get("requirement_class", "") or "") == "Blocking Required":
+        return "Blocking input"
+    return "Raw support field"
+
+
 def _evidence_validation_frame(methodology_id: str) -> pd.DataFrame:
     checks = _confirmation_checks(methodology_id).copy()
     if checks.empty:
@@ -1555,6 +1587,8 @@ def _evidence_validation_frame(methodology_id: str) -> pd.DataFrame:
     if checks.empty:
         return checks
     checks["field_name"] = checks["field_name"].astype(str)
+    checks["priority_class"] = checks.get("requirement_class", "")
+    checks["evidence_role"] = checks.apply(_evidence_role, axis=1)
     checks["system_value"] = checks["current_source_value"]
     checks["system_source"] = checks["current_source"]
     checks["evidence_source"] = checks.apply(_evidence_source_label, axis=1)
@@ -1580,7 +1614,7 @@ def _evidence_validation_frame(methodology_id: str) -> pd.DataFrame:
     checks["evidence_status"] = [item[0] for item in support]
     checks["evidence_reason"] = [item[1] for item in support]
     checks["confidence_score"] = [item[2] for item in support]
-    status_rank = {"Needs Review": 0, "Unverified": 1, "Supported": 2, "Verified": 3}
+    status_rank = {"Needs Review": 0, "Awaiting Evidence": 1, "Unverified": 1, "Supported": 2, "Verified": 3}
     checks["validation_rank"] = checks["validation_status"].map(status_rank).fillna(9)
     return checks.sort_values(["validation_rank", "factor", "field_name"]).reset_index(drop=True)
 
@@ -1844,7 +1878,7 @@ def _render_metric_calculation_checkpoint() -> None:
 def _render_step_4_candidates(methodology_id: str) -> None:
     evidence = _evidence_validation_frame(methodology_id)
     if evidence.empty:
-        st.info("No system values are ready for evidence validation yet. Resolve missing fields first.")
+        st.info("No fields are ready for evidence work yet. Resolve blocking fields or save source values first.")
         return
     completeness = _completeness_frame(methodology_id)
     missing_count = (
@@ -1860,14 +1894,17 @@ def _render_step_4_candidates(methodology_id: str) -> None:
     )
     if missing_count:
         st.warning(f"{missing_count} blocking required fields are still missing. Evidence validation below only covers fields that already have a system value.")
-    counts = evidence["evidence_status"].value_counts().to_dict()
+    validation_counts = evidence["validation_status"].value_counts().to_dict()
+    ready_for_decision = evidence[evidence["validation_status"].astype(str).isin({"Verified", "Supported", "Needs Review"})].copy()
     cols = st.columns(4)
-    cols[0].metric("Evidence Fields", len(evidence))
-    cols[1].metric("Supported", int(counts.get("Supported", 0)))
-    cols[2].metric("Weak Support", int(counts.get("Weak Support", 0)))
-    cols[3].metric("Unsupported", int(counts.get("Unsupported", 0)))
-    st.caption("Evidence Validation supports the field review workflow. It checks whether a proposed value has adequate source support.")
+    cols[0].metric("Evidence Queue", len(evidence))
+    cols[1].metric("Awaiting Evidence", int(validation_counts.get("Awaiting Evidence", 0)) + int(validation_counts.get("Unverified", 0)))
+    cols[2].metric("Ready For Approval", len(ready_for_decision))
+    cols[3].metric("Needs Review", int(validation_counts.get("Needs Review", 0)))
+    st.caption("Blank evidence means Awaiting Evidence. It does not create a review item until you enter evidence or a variance is detected.")
     editable_cols = [
+        "priority_class",
+        "evidence_role",
         "factor",
         "field_name",
         "system_value",
@@ -1893,6 +1930,8 @@ def _render_step_4_candidates(methodology_id: str) -> None:
             key="data_confirmation_candidate_editor",
             column_config={
                 "factor": st.column_config.TextColumn("Factor", disabled=True),
+                "priority_class": st.column_config.TextColumn("Priority Class", disabled=True),
+                "evidence_role": st.column_config.TextColumn("Evidence Role", disabled=True),
                 "field_name": st.column_config.TextColumn("Field", disabled=True),
                 "system_value": st.column_config.TextColumn("System Value", disabled=True),
                 "system_source": st.column_config.TextColumn("System Source", disabled=True),
@@ -1902,7 +1941,7 @@ def _render_step_4_candidates(methodology_id: str) -> None:
                 "evidence_value": st.column_config.TextColumn("Evidence Value"),
                 "difference_pct": st.column_config.NumberColumn("Difference %", disabled=True, format="%.2f"),
                 "validation_status": st.column_config.SelectboxColumn(
-                    "Validation Status",
+                    "Evidence Result",
                     options=VALIDATION_STATUS_OPTIONS,
                 ),
                 "evidence_strength": st.column_config.SelectboxColumn(
@@ -1946,7 +1985,7 @@ def _approval_candidates(approvals: pd.DataFrame) -> pd.DataFrame:
     for _, row in approvals.iterrows():
         decision = str(row.get("approval_decision", "") or "").strip()
         field = str(row.get("field_name", "") or "").strip()
-        if not field or decision == "Send To Review":
+        if not field or decision in {"Await Evidence", "Send To Review"}:
             continue
         approved_value = row.get("approved_value")
         if approved_value is None or str(approved_value).strip() == "":
@@ -2008,9 +2047,16 @@ def _render_step_5_reconciliation(methodology_id: str) -> pd.DataFrame:
         if col not in approvals.columns:
             approvals[col] = ""
         approvals[col] = approvals[col].fillna("")
+    approvals["has_evidence"] = approvals.apply(_has_evidence_entered, axis=1)
     approvals["approval_decision"] = approvals.apply(
         lambda row: str(row.get("approval_decision") or "").strip()
-        or ("Accept System Value" if str(row.get("validation_status", "")) in {"Verified", "Supported"} else "Send To Review"),
+        or (
+            "Accept System Value"
+            if str(row.get("validation_status", "")) in {"Verified", "Supported"}
+            else "Send To Review"
+            if str(row.get("validation_status", "")) == "Needs Review"
+            else "Await Evidence"
+        ),
         axis=1,
     )
     approvals["approved_value"] = approvals.apply(
@@ -2024,17 +2070,31 @@ def _render_step_5_reconciliation(methodology_id: str) -> pd.DataFrame:
         axis=1,
     )
 
-    decisions = approvals["approval_decision"].value_counts().to_dict()
-    cols = st.columns(3)
-    cols[0].metric("Accept System", int(decisions.get("Accept System Value", 0)))
-    cols[1].metric("Replace With Evidence", int(decisions.get("Replace With Evidence Value", 0)))
-    cols[2].metric("Send To Review", int(decisions.get("Send To Review", 0)))
+    active_approvals = approvals[
+        approvals["approval_decision"].astype(str).ne("Await Evidence")
+        | approvals["has_evidence"].astype(bool)
+        | approvals["validation_status"].astype(str).isin({"Verified", "Supported", "Needs Review"})
+    ].copy()
+    decisions = active_approvals["approval_decision"].value_counts().to_dict() if not active_approvals.empty else {}
+    awaiting_count = int(len(approvals) - len(active_approvals))
+    cols = st.columns(4)
+    cols[0].metric("Awaiting Evidence", awaiting_count)
+    cols[1].metric("Accept System", int(decisions.get("Accept System Value", 0)))
+    cols[2].metric("Replace With Evidence", int(decisions.get("Replace With Evidence Value", 0)))
+    cols[3].metric("Send To Review", int(decisions.get("Send To Review", 0)))
+    st.caption("Approval Decisions only shows rows with evidence entered or a real validation result. Awaiting Evidence rows stay out of the review queue.")
+
+    if active_approvals.empty:
+        st.info("No approval decisions are needed yet. Add evidence in Step 4 when you want to validate or replace a system value.")
+        return approvals
 
     with st.form("data_confirmation_approval_form"):
         edited = st.data_editor(
             clean_for_display(
-                approvals[
+                active_approvals[
                     [
+                        "priority_class",
+                        "evidence_role",
                         "factor",
                         "field_name",
                         "system_value",
@@ -2053,6 +2113,8 @@ def _render_step_5_reconciliation(methodology_id: str) -> pd.DataFrame:
             num_rows="fixed",
             key="data_confirmation_approval_editor",
             column_config={
+                "priority_class": st.column_config.TextColumn("Priority Class", disabled=True),
+                "evidence_role": st.column_config.TextColumn("Evidence Role", disabled=True),
                 "factor": st.column_config.TextColumn("Factor", disabled=True),
                 "field_name": st.column_config.TextColumn("Field", disabled=True),
                 "system_value": st.column_config.TextColumn("System Value", disabled=True),
@@ -2166,10 +2228,10 @@ def _render_human_workflow_cards() -> None:
     with st.expander("3. Metric Calculation", expanded=True):
         _render_metric_calculation_checkpoint()
 
-    with st.expander("4. Evidence Validation", expanded=True):
+    with st.expander("4. Evidence Workbench", expanded=True):
         _render_step_4_candidates(methodology_id)
 
-    with st.expander("5. Reconciliation & Approval", expanded=True):
+    with st.expander("5. Approval Decisions", expanded=True):
         approvals = _render_step_5_reconciliation(methodology_id)
 
     with st.expander("6. Publish Outputs", expanded=False):
@@ -2213,7 +2275,7 @@ def render_data_confirmation_workflow(methodology_id: str) -> None:
                         "field_or_metric": "Methodology fields",
                         "primary_check": "Use Data Completeness Review to resolve missing values before documentary validation.",
                         "preferred_evidence": "Issuer-specific source document, API record, or approved manual input.",
-                        "approval_note": "Evidence Validation should only test fields that already have system values.",
+                        "approval_note": "Evidence Workbench should only test fields that already have system values.",
                     }
                 ]
             )

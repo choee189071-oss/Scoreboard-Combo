@@ -476,7 +476,8 @@ deal_cols[2].metric("Analysis Year", st.session_state.get("analysis_year") or "N
 with st.expander("Session details", expanded=False):
     c1, c2 = st.columns(2)
     with c1:
-        st.write("Source readiness")
+        st.write("Raw source readiness")
+        st.caption("Extraction-level status only. Use Data Confirmation to see what actually blocks scoring.")
         if source_counts:
             st.dataframe(
                 pd.DataFrame(

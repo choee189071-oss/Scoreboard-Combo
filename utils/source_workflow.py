@@ -442,6 +442,7 @@ def _readiness_tabs(source_report: pd.DataFrame) -> None:
         return
     selected = selected_source_report(source_report)
     counts = source_readiness_counts(source_report)
+    st.caption("Raw source readiness is extraction-level status. A raw missing field does not always block rating if a direct metric or approved value already exists.")
     st.dataframe(
         pd.DataFrame([{"readiness_status": key, "field_count": value} for key, value in counts.items()]),
         width="stretch",
@@ -450,7 +451,7 @@ def _readiness_tabs(source_report: pd.DataFrame) -> None:
     missing = selected[selected["readiness_status"].astype(str).eq("missing")]
     ready = selected[selected["readiness_status"].astype(str).eq("independent_ready")]
     review = selected[selected["readiness_status"].astype(str).isin(["source_pending", "needs_review"])]
-    tabs = st.tabs(["Missing", "Ready", "Review", "All Selected"])
+    tabs = st.tabs(["Raw Missing", "Raw Ready", "Raw Review", "All Selected"])
     for tab, frame, empty in [
         (tabs[0], missing, "No missing selected fields."),
         (tabs[1], ready, "No independently ready fields yet."),
@@ -797,5 +798,5 @@ def render_source_workflow(methodology_id: str) -> None:
                         st.dataframe(clean_for_display(direct_metric_debug), width="stretch", hide_index=True)
 
     with st.container(border=True):
-        st.markdown("**Source readiness**")
+        st.markdown("**Raw source readiness**")
         _readiness_tabs(st.session_state.get("source_report", pd.DataFrame()))
