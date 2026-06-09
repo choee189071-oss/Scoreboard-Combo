@@ -354,12 +354,10 @@ with st.container(border=True):
             except Exception:
                 st.session_state["methodology_formula_results"] = formula_results
             if direct_metric_overrides:
-                with st.expander("Workbook direct metric debug", expanded=True):
-                    st.dataframe(
-                        clean_for_display(st.session_state["workbook_direct_metric_debug"]),
-                        width="stretch",
-                        hide_index=True,
-                    )
+                st.caption(
+                    f"{len(direct_metric_overrides)} workbook direct metric(s) applied to formula inputs. "
+                    "Full debug details are in Developer Tools > Advanced Diagnostics."
+                )
             if not confirmed_formula_inputs.empty:
                 with st.expander("Confirmed inputs applied to formula engine", expanded=True):
                     st.dataframe(clean_for_display(confirmed_formula_inputs), width="stretch", hide_index=True)

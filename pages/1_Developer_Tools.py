@@ -49,10 +49,18 @@ current_context_card()
 methodology_id = st.session_state.get("methodology_id", "moodys_ccd_go")
 issuer_data = st.session_state.get("issuer_data", {}) or {}
 source_report = st.session_state.get("source_report", pd.DataFrame())
+source_candidates = st.session_state.get("source_candidates", pd.DataFrame())
 formula_results = st.session_state.get("formula_results", pd.DataFrame())
 rating_output = st.session_state.get("rating_output")
 
-tabs = st.tabs(["Methodology Audit", "Clean Data Simulation", "Session Export", "Data Confirmation", "Session State"])
+tabs = st.tabs([
+    "Methodology Audit",
+    "Clean Data Simulation",
+    "Session Export",
+    "Data Confirmation",
+    "Advanced Diagnostics",
+    "Session State",
+])
 
 with tabs[0]:
     st.subheader("Structural Audit")
@@ -228,6 +236,44 @@ with tabs[3]:
     _download_dataframe("Download data_confirmation_plan.csv", plan_df, "data_confirmation_plan.csv")
 
 with tabs[4]:
+    st.subheader("Advanced Diagnostics")
+    st.caption(
+        "Developer-only diagnostic tables for source plumbing and runtime debugging. "
+        "These are hidden from the normal Workflow because they are not user action steps."
+    )
+
+    direct_metric_debug = st.session_state.get("workbook_direct_metric_debug", pd.DataFrame())
+    with st.expander("Workbook direct metric debug", expanded=True):
+        st.caption(
+            "Shows workbook direct metrics that were detected and the final value prepared for formula input. "
+            "Use this only when debugging direct metric overrides."
+        )
+        if isinstance(direct_metric_debug, pd.DataFrame) and not direct_metric_debug.empty:
+            st.dataframe(clean_for_display(direct_metric_debug), width="stretch", hide_index=True)
+            _download_dataframe(
+                "Download workbook_direct_metric_debug.csv",
+                direct_metric_debug,
+                "workbook_direct_metric_debug.csv",
+            )
+        else:
+            st.info("No workbook direct metric debug rows are stored in this session.")
+
+    diagnostics = [
+        ("Source readiness summary", st.session_state.get("source_readiness_summary", pd.DataFrame()), "source_readiness_summary.csv"),
+        ("Source candidates", source_candidates, "source_candidates.csv"),
+        ("Source match reports", st.session_state.get("source_match_reports", pd.DataFrame()), "source_match_reports.csv"),
+        ("Approved source candidates", st.session_state.get("approved_source_candidates", pd.DataFrame()), "approved_source_candidates.csv"),
+        ("Manual source candidates", st.session_state.get("manual_source_candidates", pd.DataFrame()), "manual_source_candidates.csv"),
+    ]
+    for label, frame, file_name in diagnostics:
+        with st.expander(label, expanded=False):
+            if isinstance(frame, pd.DataFrame) and not frame.empty:
+                st.dataframe(clean_for_display(frame), width="stretch", hide_index=True)
+                _download_dataframe(f"Download {file_name}", frame, file_name)
+            else:
+                st.info(f"No {label.lower()} data available.")
+
+with tabs[5]:
     st.subheader("Current Session Preview")
     if issuer_data:
         with st.expander("issuer_data", expanded=False):

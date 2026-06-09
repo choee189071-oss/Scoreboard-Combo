@@ -874,8 +874,10 @@ def render_source_workflow(methodology_id: str) -> None:
                     )
                 st.success(f"Saved issuer_data with {len(issuer_data)} selected fields.")
                 if not direct_metric_debug.empty:
-                    with st.expander("Workbook direct metric debug", expanded=True):
-                        st.dataframe(clean_for_display(direct_metric_debug), width="stretch", hide_index=True)
+                    st.caption(
+                        f"{len(direct_metric_debug)} workbook direct metric(s) applied to issuer_data. "
+                        "Full debug details are in Developer Tools > Advanced Diagnostics."
+                    )
 
     with st.container(border=True):
         st.markdown("**Source inventory readiness (support coverage, not rating blockers)**")
