@@ -14,7 +14,27 @@ from engine.calculator_engine import calculate_all_formulas
 from engine.factor_engine import load_factor_template
 from engine.rating_audit import build_rating_audit_trail
 from engine.rating_engine import run_rating_engine, summarize_rating_output
-from utils.data_confirmation import apply_confirmed_inputs_to_issuer_data, evidence_confidence_metrics
+try:
+    from utils.data_confirmation import apply_confirmed_inputs_to_issuer_data, evidence_confidence_metrics
+except ImportError:
+    from utils import data_confirmation as _data_confirmation
+
+    def apply_confirmed_inputs_to_issuer_data(issuer_data: dict | None, methodology_id: str | None = None):
+        helper = getattr(_data_confirmation, "apply_confirmed_inputs_to_issuer_data", None)
+        if callable(helper):
+            return helper(issuer_data, methodology_id)
+        return dict(issuer_data or {}), pd.DataFrame()
+
+    def evidence_confidence_metrics(methodology_id: str | None = None):
+        helper = getattr(_data_confirmation, "evidence_confidence_metrics", None)
+        if callable(helper):
+            return helper(methodology_id)
+        return {
+            "data_completeness_pct": 0.0,
+            "evidence_coverage_pct": 0.0,
+            "verified_fields": 0,
+            "verified_denominator": 0,
+        }
 from utils.manual_scores import render_manual_score_editor
 from utils.source_workflow import (
     _direct_metric_debug_frame,
