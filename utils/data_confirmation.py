@@ -196,6 +196,16 @@ APPROVAL_STATUS_RULES: List[Dict[str, str]] = [
         "next_action": "Use ACFR/API/debt support before falling back to manual input.",
     },
     {
+        "status": "awaiting_independent_check",
+        "meaning": "Current source layer has a value, but no ACFR/API/debt-support confirmation has been entered yet.",
+        "next_action": "Enter an independent value and citation only for fields that need confirmation.",
+    },
+    {
+        "status": "missing_current_value",
+        "meaning": "Neither the current source layer nor the independent confirmation table has a usable value.",
+        "next_action": "Find the raw field in ACFR/API/debt support or add a manual fallback.",
+    },
+    {
         "status": "issuer_mismatch",
         "meaning": "Document issuer, pledge, or credit does not match the current deal.",
         "next_action": "Exclude from source QA.",
@@ -690,6 +700,24 @@ def _source_value_row(field: str, selected_by_field: dict[str, pd.Series], candi
             "source_status": "manual_input",
             "source_value_origin": "manual_source_values",
         }
+    if field in DIRECT_METRIC_FIELDS:
+        debug_row = _direct_metric_debug_lookup().get(field, {})
+        workbook_value = debug_row.get("final_formula_input", debug_row.get("workbook_value"))
+        if _has_value(workbook_value):
+            return {
+                "current_source_value": workbook_value,
+                "current_source": debug_row.get("source_used") or "CreditScope workbook direct metric",
+                "source_status": "workbook_direct_metric",
+                "source_value_origin": "workbook_direct_metric_debug",
+            }
+        issuer_data = st.session_state.get("issuer_data", {}) or {}
+        if field in issuer_data and _has_value(issuer_data[field]):
+            return {
+                "current_source_value": issuer_data[field],
+                "current_source": "issuer_data direct metric",
+                "source_status": "issuer_data_direct_metric",
+                "source_value_origin": "issuer_data",
+            }
     return {
         "current_source_value": "",
         "current_source": "",
@@ -740,13 +768,41 @@ def _parse_float(value: Any) -> float | None:
         return None
 
 
+def _has_value(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, float) and pd.isna(value):
+        return False
+    if isinstance(value, str) and not value.strip():
+        return False
+    return True
+
+
+def _direct_metric_debug_lookup() -> dict[str, dict[str, Any]]:
+    debug = st.session_state.get("workbook_direct_metric_debug", pd.DataFrame())
+    if not isinstance(debug, pd.DataFrame) or debug.empty or "field_name" not in debug.columns:
+        return {}
+    return {
+        str(row.get("field_name", "") or "").strip(): row.to_dict()
+        for _, row in debug.iterrows()
+        if str(row.get("field_name", "") or "").strip()
+    }
+
+
 def _comparison_status(field: str, selected_value: Any, independent_value: Any) -> tuple[str, Any, Any]:
+    selected_has_value = _has_value(selected_value)
+    independent_has_value = _has_value(independent_value)
+    if not independent_has_value:
+        if selected_has_value:
+            return "awaiting_independent_check", "", ""
+        return "missing_current_value", "", ""
+    if not selected_has_value:
+        return "independent_candidate_only", "", ""
+
     selected = _parse_float(selected_value)
     independent = _parse_float(independent_value)
-    if independent is None:
-        return "missing_source", "", ""
-    if selected is None:
-        return "source_pending", "", ""
+    if selected is None or independent is None:
+        return "non_numeric_check_required", "", ""
     diff = independent - selected
     abs_diff = abs(diff)
     tolerance = FIELD_TOLERANCES.get(field, max(abs(selected) * 0.01, 0.01))
@@ -831,11 +887,13 @@ def _render_step_4_candidates(methodology_id: str) -> None:
         st.info("This methodology does not have a source-QA checklist yet.")
         return
     status_counts = checks["source_status"].fillna("unknown").astype(str).value_counts().to_dict() if "source_status" in checks.columns else {}
+    has_current_value = checks["current_source_value"].map(_has_value) if "current_source_value" in checks.columns else pd.Series(dtype=bool)
+    has_independent_value = checks["independent_value"].map(_has_value) if "independent_value" in checks.columns else pd.Series(dtype=bool)
     cols = st.columns(4)
-    cols[0].metric("Missing", int(status_counts.get("missing", 0)))
-    cols[1].metric("Manual / pending", int(status_counts.get("manual_input", 0)) + int(status_counts.get("source_pending", 0)))
-    cols[2].metric("Candidates", int(status_counts.get("candidate_available", 0)))
-    cols[3].metric("Selected rows", int(status_counts.get("independent_ready", 0)) + int(status_counts.get("scorecard_implied", 0)))
+    cols[0].metric("Current values", int(has_current_value.sum()))
+    cols[1].metric("Current missing", int((~has_current_value).sum()) if len(has_current_value) else 0)
+    cols[2].metric("Manual / review", int(status_counts.get("manual_input", 0)) + int(status_counts.get("source_pending", 0)) + int(status_counts.get("needs_review", 0)))
+    cols[3].metric("Independent filled", int(has_independent_value.sum()))
     st.caption("These are pre-formula source fields and direct metric candidates. They are not formula output values.")
     editable_cols = [
         "factor",
@@ -890,9 +948,9 @@ def _render_step_5_comparison(methodology_id: str) -> pd.DataFrame:
     cols = st.columns(4)
     counts = comparison["qa_status"].value_counts().to_dict()
     cols[0].metric("Matched", int(counts.get("matched", 0)))
-    cols[1].metric("Minor", int(counts.get("minor_difference", 0)))
-    cols[2].metric("Material", int(counts.get("material_difference", 0)))
-    cols[3].metric("Needs source", int(counts.get("missing_source", 0)) + int(counts.get("source_pending", 0)))
+    cols[1].metric("Differences", int(counts.get("minor_difference", 0)) + int(counts.get("material_difference", 0)))
+    cols[2].metric("Awaiting check", int(counts.get("awaiting_independent_check", 0)))
+    cols[3].metric("Needs value", int(counts.get("missing_current_value", 0)) + int(counts.get("independent_candidate_only", 0)))
     show_cols = [
         "factor",
         "field_name",
