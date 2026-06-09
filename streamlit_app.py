@@ -399,7 +399,7 @@ with st.container(border=True):
         rating_cols[3].metric("Warnings", len(rating_result.get("warnings", []) or []))
         confidence = evidence_confidence_metrics(methodology_id)
         confidence_cols = st.columns(3)
-        confidence_cols[0].metric("Data Completeness", f"{confidence['data_completeness_pct']:.0f}%")
+        confidence_cols[0].metric("Blocking Completion", f"{confidence['data_completeness_pct']:.0f}%")
         confidence_cols[1].metric("Evidence Coverage", f"{confidence['evidence_coverage_pct']:.0f}%")
         confidence_cols[2].metric("Verified Fields", f"{confidence['verified_fields']} / {confidence['verified_denominator']}")
         warnings = rating_result.get("warnings", []) or []

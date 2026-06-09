@@ -21,9 +21,9 @@ HUMAN_WORKFLOW_STEPS: List[Dict[str, str]] = [
     },
     {
         "step": "2. Data Completeness Review",
-        "human_action": "Resolve required fields marked Missing before evidence validation.",
-        "system_action": "Classify fields as Verified, Needs Review, Missing, or Optional.",
-        "decision_output": "Completeness status",
+        "human_action": "Resolve Blocking Required fields first; use ACFR support to validate values that already feed scoring.",
+        "system_action": "Classify fields as Blocking Required, Validation Support, or Optional / Contextual before status review.",
+        "decision_output": "Priority queue",
     },
     {
         "step": "3. Metric Calculation",
@@ -193,6 +193,27 @@ APPROVAL_STATUS_RULES: List[Dict[str, str]] = [
         "status": "Weak",
         "meaning": "Evidence is narrative, AI-assisted, manual, or otherwise not directly tied to an official table.",
         "next_action": "Use only when stronger evidence is unavailable.",
+    },
+]
+
+REQUIREMENT_CLASS_RULES: List[Dict[str, str]] = [
+    {
+        "priority_class": "Blocking Required",
+        "meaning": "The current formula path cannot produce a ready result without this value.",
+        "rating_impact": "Blocks formula readiness and must be resolved before relying on the rating.",
+        "next_action": "Find a source value, approve a manual value, or mark it unavailable with review note.",
+    },
+    {
+        "priority_class": "Validation Support",
+        "meaning": "A direct metric, API value, workbook value, or formula-ready value already feeds scoring.",
+        "rating_impact": "Does not block scoring; used to double-check accuracy and strengthen audit support.",
+        "next_action": "Use ACFR/API/debt support to verify, support, or replace the system value if needed.",
+    },
+    {
+        "priority_class": "Optional / Contextual",
+        "meaning": "The current bond type or methodology path does not require this field.",
+        "rating_impact": "Does not affect this rating run unless the deal context changes.",
+        "next_action": "Leave for context or future methodology paths; do not prioritize for current scoring.",
     },
 ]
 
@@ -415,6 +436,11 @@ COMPLETENESS_STATUS_ORDER = {
     "Needs Review": 1,
     "Verified": 2,
     "Optional": 3,
+}
+REQUIREMENT_CLASS_ORDER = {
+    "Blocking Required": 0,
+    "Validation Support": 1,
+    "Optional / Contextual": 2,
 }
 
 VALIDATION_STATUS_OPTIONS = ["Verified", "Supported", "Needs Review", "Unverified"]
@@ -904,6 +930,146 @@ def _source_value_row(
     }
 
 
+def _formula_results_frame() -> pd.DataFrame:
+    for state_key in ["methodology_formula_results", "formula_results"]:
+        frame = st.session_state.get(state_key)
+        if isinstance(frame, pd.DataFrame) and not frame.empty:
+            return frame.copy()
+    return pd.DataFrame()
+
+
+def _split_missing_fields(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        values = value
+    else:
+        values = re.split(r"[;,|]", str(value))
+    return [
+        str(item).strip().strip("'\"[]()")
+        for item in values
+        if str(item).strip().strip("'\"[]()")
+    ]
+
+
+def _formula_status_lookup() -> dict[str, dict[str, Any]]:
+    frame = _formula_results_frame()
+    if frame.empty or "formula_id" not in frame.columns:
+        return {}
+    lookup: dict[str, dict[str, Any]] = {}
+    for _, row in frame.iterrows():
+        formula_id = str(row.get("formula_id", "") or "").strip()
+        if formula_id:
+            lookup[formula_id] = row.to_dict()
+    return lookup
+
+
+def _formula_blocking_missing_fields() -> set[str]:
+    frame = _formula_results_frame()
+    if frame.empty:
+        return set()
+    blocking: set[str] = set()
+    for _, row in frame.iterrows():
+        status = str(row.get("status", "") or "").strip().lower()
+        if status not in {"missing", "error"}:
+            continue
+        formula_id = str(row.get("formula_id", "") or "").strip()
+        if formula_id:
+            blocking.add(formula_id)
+        for field in _split_missing_fields(row.get("missing_fields")):
+            blocking.add(field)
+    return blocking
+
+
+def _parent_direct_metrics(field: str) -> list[str]:
+    return [
+        metric
+        for metric, dependencies in DIRECT_METRIC_DEPENDENCIES.items()
+        if field in dependencies
+    ]
+
+
+def _has_current_source_value(
+    field: str,
+    selected_by_field: dict[str, pd.Series],
+    candidates: pd.DataFrame,
+    confirmed_by_field: dict[str, dict[str, Any]],
+) -> bool:
+    source_value = _source_value_row(field, selected_by_field, candidates, confirmed_by_field)
+    return _has_value(source_value.get("current_source_value"))
+
+
+def _requirement_classification(
+    field: str,
+    required_fields: set[str],
+    selected_by_field: dict[str, pd.Series],
+    candidates: pd.DataFrame,
+    confirmed_by_field: dict[str, dict[str, Any]],
+    formula_lookup: dict[str, dict[str, Any]],
+    blocking_fields: set[str],
+) -> tuple[str, str]:
+    if field not in required_fields:
+        return (
+            "Optional / Contextual",
+            "Not used by the current methodology path or only present as an extra source candidate.",
+        )
+
+    current_value_available = _has_current_source_value(field, selected_by_field, candidates, confirmed_by_field)
+    formula_status = str(formula_lookup.get(field, {}).get("status", "") or "").strip().lower()
+    if field in blocking_fields and not current_value_available:
+        return (
+            "Blocking Required",
+            "Current formula results show this field is missing or errored.",
+        )
+
+    if field in DIRECT_METRIC_FIELDS:
+        if current_value_available or formula_status in {"ready", "manual"}:
+            return (
+                "Validation Support",
+                "A direct metric is already available for scoring; ACFR/source work is evidence validation.",
+            )
+        return (
+            "Blocking Required",
+            "This direct metric is required by the formula path and has no usable value yet.",
+        )
+
+    parents = _parent_direct_metrics(field)
+    active_parent_ready = False
+    for parent in parents:
+        parent_status = str(formula_lookup.get(parent, {}).get("status", "") or "").strip().lower()
+        parent_has_value = _has_current_source_value(parent, selected_by_field, candidates, confirmed_by_field)
+        if parent_has_value or parent_status in {"ready", "manual"}:
+            active_parent_ready = True
+            break
+    if active_parent_ready:
+        return (
+            "Validation Support",
+            "The related direct metric already feeds scoring; this raw field supports ACFR/API double-check only.",
+        )
+
+    if _formula_results_frame().empty:
+        if current_value_available:
+            return (
+                "Validation Support",
+                "A source value is present before formula execution; validate evidence but it is not currently missing.",
+            )
+        return (
+            "Blocking Required",
+            "No formula run is available yet and this methodology input has no usable source value.",
+        )
+
+    if current_value_available:
+        return (
+            "Validation Support",
+            "The formula layer is not missing this field; use it for source validation.",
+        )
+
+    return (
+        "Validation Support",
+        "Not currently blocking formula output; locate evidence only if this source support is needed.",
+    )
+
+
 def _base_check_rows(methodology_id: str) -> list[dict[str, Any]]:
     dictionary = _dictionary_lookup()
     priority = _source_priority_lookup(methodology_id)
@@ -911,17 +1077,31 @@ def _base_check_rows(methodology_id: str) -> list[dict[str, Any]]:
     selected_by_field = _selected_source_by_field()
     confirmed_by_field = _confirmed_value_lookup()
     required_fields = _required_source_fields(methodology_id)
-    optional_fields = [field for field in _candidate_field_names(candidates) if field not in set(required_fields)]
+    required_set = set(required_fields)
+    formula_lookup = _formula_status_lookup()
+    blocking_fields = _formula_blocking_missing_fields()
+    optional_fields = [field for field in _candidate_field_names(candidates) if field not in required_set]
     rows: list[dict[str, Any]] = []
     for field in required_fields + optional_fields:
         source_value = _source_value_row(field, selected_by_field, candidates, confirmed_by_field)
         priority_row = priority.get(field, {})
         candidate_summary = _candidate_value_summary(field, candidates)
+        requirement_class, requirement_reason = _requirement_classification(
+            field,
+            required_set,
+            selected_by_field,
+            candidates,
+            confirmed_by_field,
+            formula_lookup,
+            blocking_fields,
+        )
         rows.append(
             {
                 "factor": _field_factor(field, dictionary),
                 "field_name": field,
-                "required_status": "Required" if field in set(required_fields) else "Optional",
+                "requirement_class": requirement_class,
+                "requirement_reason": requirement_reason,
+                "required_status": "Required" if requirement_class == "Blocking Required" else "Optional",
                 "data_stage": _field_stage(field),
                 "current_source_value": source_value["current_source_value"],
                 "current_source": source_value["current_source"],
@@ -1109,13 +1289,16 @@ def _value_format_reason(value: Any) -> str:
 
 
 def _status_reason(row: pd.Series) -> str:
+    requirement_class = str(row.get("requirement_class", "") or "").strip()
     required_status = str(row.get("required_status", "Required") or "Required")
     current_value = row.get("current_source_value")
     source_status = str(row.get("source_status", "") or "")
-    if required_status == "Optional":
-        return "Optional field is not required for the current rating methodology."
+    if requirement_class == "Optional / Contextual" or required_status == "Optional" and not requirement_class:
+        return "Optional/contextual field is not required for the current methodology path."
+    if requirement_class == "Validation Support" and not _has_value(current_value):
+        return "Validation support field has no independent source value yet; this does not block scoring while the direct/system metric is available."
     if not _has_value(current_value):
-        return "Required field has no current value."
+        return "Blocking formula input has no current value."
     reasons: list[str] = []
     if bool(row.get("material_difference", False)):
         reasons.append(f"Multiple values detected: {row.get('candidate_values', '')}")
@@ -1136,16 +1319,24 @@ def _status_reason(row: pd.Series) -> str:
         reasons.append(format_reason)
     if reasons:
         return "; ".join(dict.fromkeys(reason for reason in reasons if reason))
+    if requirement_class == "Validation Support":
+        return "Value is available for scoring; ACFR/API evidence can be used as a validation check."
     return "Value has an acceptable source and no rule-based exceptions were detected."
 
 
 def _completeness_status(row: pd.Series) -> str:
-    if str(row.get("required_status", "Required") or "Required") == "Optional":
+    requirement_class = str(row.get("requirement_class", "") or "").strip()
+    if requirement_class == "Optional / Contextual" or str(row.get("required_status", "Required") or "Required") == "Optional" and not requirement_class:
         return "Optional"
+    if requirement_class == "Validation Support" and not _has_value(row.get("current_source_value")):
+        return "Needs Review"
     if not _has_value(row.get("current_source_value")):
         return "Missing"
     reason = _status_reason(row)
-    if reason != "Value has an acceptable source and no rule-based exceptions were detected.":
+    if reason not in {
+        "Value has an acceptable source and no rule-based exceptions were detected.",
+        "Value is available for scoring; ACFR/API evidence can be used as a validation check.",
+    }:
         return "Needs Review"
     return "Verified"
 
@@ -1160,17 +1351,22 @@ def _completeness_frame(methodology_id: str) -> pd.DataFrame:
     checks["status_reason"] = checks.apply(_status_reason, axis=1)
     checks["current_status"] = checks.apply(_completeness_status, axis=1)
     checks["status_rank"] = checks["current_status"].map(COMPLETENESS_STATUS_ORDER).fillna(9)
+    if "requirement_class" not in checks.columns:
+        checks["requirement_class"] = checks["required_status"].map(
+            {"Required": "Blocking Required", "Optional": "Optional / Contextual"}
+        ).fillna("Validation Support")
+    checks["requirement_rank"] = checks["requirement_class"].map(REQUIREMENT_CLASS_ORDER).fillna(9)
     checks["priority_rank"] = checks.apply(
         lambda row: 0
-        if row.get("required_status") == "Required" and row.get("current_status") == "Missing"
+        if row.get("requirement_class") == "Blocking Required" and row.get("current_status") == "Missing"
         else 1
-        if row.get("required_status") == "Required" and row.get("current_status") == "Needs Review"
+        if row.get("requirement_class") == "Blocking Required" and row.get("current_status") == "Needs Review"
         else 2
-        if row.get("required_status") == "Optional" and not _has_value(row.get("current_source_value"))
+        if row.get("requirement_class") == "Validation Support" and row.get("current_status") in {"Missing", "Needs Review"}
         else 3,
         axis=1,
     )
-    return checks.sort_values(["priority_rank", "status_rank", "factor", "field_name"]).reset_index(drop=True)
+    return checks.sort_values(["priority_rank", "requirement_rank", "status_rank", "factor", "field_name"]).reset_index(drop=True)
 
 
 def _difference_pct(system_value: Any, evidence_value: Any) -> float | None:
@@ -1393,28 +1589,33 @@ def evidence_confidence_metrics(methodology_id: str | None = None) -> dict[str, 
     methodology = methodology_id or st.session_state.get("methodology_id", "moodys_ccd_go")
     completeness = _completeness_frame(methodology)
     evidence = _evidence_validation_frame(methodology)
-    required = (
-        completeness[completeness["required_status"].astype(str).eq("Required")].copy()
-        if isinstance(completeness, pd.DataFrame) and not completeness.empty and "required_status" in completeness.columns
+    blocking = (
+        completeness[completeness["requirement_class"].astype(str).eq("Blocking Required")].copy()
+        if isinstance(completeness, pd.DataFrame) and not completeness.empty and "requirement_class" in completeness.columns
         else pd.DataFrame()
     )
-    required_count = int(len(required))
+    support = (
+        completeness[completeness["requirement_class"].astype(str).eq("Validation Support")].copy()
+        if isinstance(completeness, pd.DataFrame) and not completeness.empty and "requirement_class" in completeness.columns
+        else pd.DataFrame()
+    )
+    required_count = int(len(blocking))
     missing_count = (
-        int(required["current_status"].astype(str).eq("Missing").sum())
-        if not required.empty and "current_status" in required.columns
+        int(blocking["current_status"].astype(str).eq("Missing").sum())
+        if not blocking.empty and "current_status" in blocking.columns
         else 0
     )
     needs_review_count = (
-        int(required["current_status"].astype(str).eq("Needs Review").sum())
-        if not required.empty and "current_status" in required.columns
+        int(blocking["current_status"].astype(str).eq("Needs Review").sum())
+        if not blocking.empty and "current_status" in blocking.columns
         else 0
     )
     verified_required = (
-        int(required["current_status"].astype(str).eq("Verified").sum())
-        if not required.empty and "current_status" in required.columns
+        int(blocking["current_status"].astype(str).eq("Verified").sum())
+        if not blocking.empty and "current_status" in blocking.columns
         else 0
     )
-    data_completeness = (verified_required / required_count * 100) if required_count else 0.0
+    data_completeness = (verified_required / required_count * 100) if required_count else 100.0
     evidence_count = int(len(evidence)) if isinstance(evidence, pd.DataFrame) else 0
     supported_statuses = {"Verified", "Supported", "Needs Review"}
     evidence_supported = (
@@ -1427,9 +1628,11 @@ def evidence_confidence_metrics(methodology_id: str | None = None) -> dict[str, 
         if isinstance(evidence, pd.DataFrame) and not evidence.empty and "validation_status" in evidence.columns
         else 0
     )
-    evidence_coverage = (evidence_supported / required_count * 100) if required_count else 0.0
+    evidence_coverage = (evidence_supported / evidence_count * 100) if evidence_count else 0.0
     return {
         "required_fields": required_count,
+        "blocking_required_fields": required_count,
+        "validation_support_fields": int(len(support)),
         "missing_fields": missing_count,
         "needs_review_fields": needs_review_count,
         "data_completeness_pct": data_completeness,
@@ -1471,7 +1674,8 @@ def _queue_display(frame: pd.DataFrame) -> pd.DataFrame:
     cols = [
         "field_name",
         "factor",
-        "required_status",
+        "requirement_class",
+        "requirement_reason",
         "expected_source",
         "current_status",
         "status_reason",
@@ -1484,7 +1688,8 @@ def _queue_display(frame: pd.DataFrame) -> pd.DataFrame:
         columns={
             "field_name": "Field",
             "factor": "Factor",
-            "required_status": "Required / Optional",
+            "requirement_class": "Priority Class",
+            "requirement_reason": "Why This Class",
             "expected_source": "Expected Source",
             "current_status": "Current Status",
             "status_reason": "Status Reason",
@@ -1511,6 +1716,8 @@ def _render_field_review_panels(frame: pd.DataFrame, title: str) -> None:
             cols = st.columns(2)
             cols[0].markdown(f"**Field Name**  \n{field}")
             cols[1].markdown(f"**Factor / Category**  \n{row.get('factor', '')}")
+            st.markdown(f"**Priority Class**  \n{row.get('requirement_class', '')}")
+            st.markdown(f"**Why this priority**  \n{row.get('requirement_reason', '')}")
             st.markdown(f"**Definition**  \n{_field_definition(field, dictionary)}")
             st.markdown(f"**Why this field matters**  \n{_why_field_matters(row)}")
             detail_cols = st.columns(2)
@@ -1572,49 +1779,44 @@ def _render_data_completeness_review(methodology_id: str) -> pd.DataFrame:
         st.info("No required-field list is available for this methodology yet.")
         return completeness
 
-    required = completeness[completeness["required_status"].astype(str).eq("Required")].copy()
-    counts = required["current_status"].value_counts().to_dict() if not required.empty else {}
+    blocking = completeness[completeness["requirement_class"].astype(str).eq("Blocking Required")].copy()
+    support = completeness[completeness["requirement_class"].astype(str).eq("Validation Support")].copy()
+    optional = completeness[completeness["requirement_class"].astype(str).eq("Optional / Contextual")].copy()
+    counts = blocking["current_status"].value_counts().to_dict() if not blocking.empty else {}
     verified = int(counts.get("Verified", 0))
     needs_review = int(counts.get("Needs Review", 0))
     missing = int(counts.get("Missing", 0))
-    completion_rate = (verified / len(required) * 100) if len(required) else 0.0
+    completion_rate = (verified / len(blocking) * 100) if len(blocking) else 100.0
+    support_to_check = 0
+    if not support.empty and "current_status" in support.columns:
+        support_to_check = int(support["current_status"].astype(str).isin({"Missing", "Needs Review"}).sum())
 
     cols = st.columns(5)
-    cols[0].metric("Required Fields", len(required))
-    cols[1].metric("Verified", verified)
-    cols[2].metric("Needs Review", needs_review)
-    cols[3].metric("Missing", missing)
+    cols[0].metric("Blocking Required", len(blocking))
+    cols[1].metric("Blocking Verified", verified)
+    cols[2].metric("Blocking Review", needs_review)
+    cols[3].metric("Blocking Missing", missing)
     cols[4].metric("Completion Rate", f"{completion_rate:.0f}%")
-
-    missing_df = completeness[
-        completeness["required_status"].astype(str).eq("Required")
-        & completeness["current_status"].astype(str).eq("Missing")
-    ].copy()
-    review_df = completeness[
-        completeness["required_status"].astype(str).eq("Required")
-        & completeness["current_status"].astype(str).eq("Needs Review")
-    ].copy()
-    verified_df = completeness[
-        completeness["required_status"].astype(str).eq("Required")
-        & completeness["current_status"].astype(str).eq("Verified")
-    ].copy()
-    optional_df = completeness[completeness["required_status"].astype(str).eq("Optional")].copy()
+    st.caption("Only Blocking Required affects formula readiness. Validation Support is for ACFR/API/workbook double-check and does not block scoring.")
 
     st.markdown("**Priority Review Queue**")
-    tabs = st.tabs(["Missing", "Needs Review", "Verified", "Optional"])
+    st.caption(f"Validation Support rows needing evidence review: {support_to_check}. Optional / Contextual rows are kept visible but non-blocking.")
+    tabs = st.tabs(["Blocking Required", "Validation Support", "Optional / Contextual", "Verified"])
+    verified_df = completeness[completeness["current_status"].astype(str).eq("Verified")].copy()
     for tab, label, frame in [
-        (tabs[0], "Missing", missing_df),
-        (tabs[1], "Needs Review", review_df),
-        (tabs[2], "Verified", verified_df),
-        (tabs[3], "Optional", optional_df),
+        (tabs[0], "Blocking Required", blocking),
+        (tabs[1], "Validation Support", support),
+        (tabs[2], "Optional / Contextual", optional),
+        (tabs[3], "Verified", verified_df),
     ]:
         with tab:
             if frame.empty:
                 st.info(f"No {label.lower()} fields.")
             else:
                 st.dataframe(_queue_display(frame), width="stretch", hide_index=True)
-            if label in {"Missing", "Needs Review"}:
-                _render_field_review_panels(frame, label)
+            if label in {"Blocking Required", "Validation Support"}:
+                action_frame = frame[frame["current_status"].astype(str).isin({"Missing", "Needs Review"})].copy()
+                _render_field_review_panels(action_frame, label)
     return completeness
 
 
@@ -1646,12 +1848,18 @@ def _render_step_4_candidates(methodology_id: str) -> None:
         return
     completeness = _completeness_frame(methodology_id)
     missing_count = (
-        int(completeness["current_status"].astype(str).eq("Missing").sum())
-        if isinstance(completeness, pd.DataFrame) and not completeness.empty and "current_status" in completeness.columns
+        int(
+            completeness[
+                completeness["requirement_class"].astype(str).eq("Blocking Required")
+            ]["current_status"].astype(str).eq("Missing").sum()
+        )
+        if isinstance(completeness, pd.DataFrame)
+        and not completeness.empty
+        and {"current_status", "requirement_class"}.issubset(completeness.columns)
         else 0
     )
     if missing_count:
-        st.warning(f"{missing_count} required fields are still missing. Evidence validation below only covers fields that already have a system value.")
+        st.warning(f"{missing_count} blocking required fields are still missing. Evidence validation below only covers fields that already have a system value.")
     counts = evidence["evidence_status"].value_counts().to_dict()
     cols = st.columns(4)
     cols[0].metric("Evidence Fields", len(evidence))
@@ -1871,9 +2079,9 @@ def _render_step_5_reconciliation(methodology_id: str) -> pd.DataFrame:
 def _render_step_6_publish(methodology_id: str, approvals: pd.DataFrame) -> None:
     metrics = evidence_confidence_metrics(methodology_id)
     cols = st.columns(3)
-    cols[0].metric("Completion Rate", f"{metrics['data_completeness_pct']:.0f}%")
+    cols[0].metric("Blocking Completion", f"{metrics['data_completeness_pct']:.0f}%")
     cols[1].metric("Evidence Coverage", f"{metrics['evidence_coverage_pct']:.0f}%")
-    cols[2].metric("Verified Fields", f"{metrics['verified_fields']} / {metrics['verified_denominator']}")
+    cols[2].metric("Blocking Verified", f"{metrics['verified_fields']} / {metrics['verified_denominator']}")
 
     confirmed = _confirmed_inputs_for_context()
     st.markdown("**Confirmed Output Preview**")
@@ -1929,6 +2137,7 @@ def data_confirmation_export() -> pd.DataFrame:
     """Flat process export for docs, reports, or future page downloads."""
     sections = [
         ("human_workflow", HUMAN_WORKFLOW_STEPS),
+        ("requirement_class_rules", REQUIREMENT_CLASS_RULES),
         ("file_registry_template", SP_LOCAL_GOV_FILE_REGISTRY),
         ("field_checklist", SP_LOCAL_GOV_FIELD_CHECKLIST),
         ("approval_rules", APPROVAL_STATUS_RULES),
@@ -1971,7 +2180,7 @@ def render_data_confirmation_workflow(methodology_id: str) -> None:
     notice = st.session_state.pop("data_confirmation_save_notice", None)
     if notice:
         st.success(notice)
-    st.caption("Operational validation workflow: classify required fields, resolve missing/review queues, save confirmed_inputs.csv, then run formulas from confirmed values.")
+    st.caption("Operational validation workflow: resolve Blocking Required fields first, validate support fields against ACFR/API/workbook evidence, then run formulas from confirmed values.")
 
     tabs = st.tabs(["Operational workflow", "File registry", "Field checklist", "Status definitions"])
     with tabs[0]:
@@ -2010,6 +2219,13 @@ def render_data_confirmation_workflow(methodology_id: str) -> None:
             )
         st.dataframe(clean_for_display(checklist), width="stretch", hide_index=True)
     with tabs[3]:
+        st.write("Priority class definitions")
+        st.dataframe(
+            clean_for_display(_frame(REQUIREMENT_CLASS_RULES)),
+            width="stretch",
+            hide_index=True,
+        )
+        st.write("Approval and evidence status definitions")
         st.dataframe(
             clean_for_display(_frame(APPROVAL_STATUS_RULES)),
             width="stretch",

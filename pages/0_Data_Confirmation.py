@@ -23,7 +23,7 @@ page_header(
 )
 current_context_card()
 
-st.info("Use this before scoring: resolve Missing and Needs Review fields, save confirmed inputs, then run formulas from data/confirmed_inputs.csv-backed values.")
+st.info("Use this before scoring: resolve Blocking Required fields first. Validation Support fields are for ACFR/API/workbook double-check and do not block rating readiness.")
 st.page_link("streamlit_app.py", label="Open Workflow")
 
 render_data_confirmation_workflow(st.session_state.get("methodology_id", "moodys_ccd_go"))
