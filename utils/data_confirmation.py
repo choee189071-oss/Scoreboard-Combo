@@ -31,16 +31,16 @@ HUMAN_WORKFLOW_STEPS: List[Dict[str, str]] = [
         "decision_output": "Evidence map",
     },
     {
-        "step": "4. Resolve source candidates",
-        "human_action": "Fill independent source candidates for missing, manual, or source-pending raw fields.",
-        "system_action": "Keep pre-formula source values separate from calculated metric outputs.",
-        "decision_output": "Pre-formula candidates",
+        "step": "4. ACFR evidence check",
+        "human_action": "Enter ACFR value, page, and line item only for fields ACFR can support.",
+        "system_action": "Show the system value beside the ACFR evidence without treating blank evidence as a data failure.",
+        "decision_output": "ACFR evidence",
     },
     {
-        "step": "5. Compare sources",
-        "human_action": "Compare selected source value vs. ACFR/API/debt-support candidate.",
-        "system_action": "Compute variance, materiality flag, affected field, and formula dependency.",
-        "decision_output": "Difference review",
+        "step": "5. Reconcile values",
+        "human_action": "Confirm system value, use ACFR value, or flag a mismatch for review.",
+        "system_action": "Compute variance only when both system and ACFR values are present.",
+        "decision_output": "Reconciliation decision",
     },
     {
         "step": "6. AI review",
@@ -422,10 +422,10 @@ FIELD_EVIDENCE_HINTS: Dict[str, str] = {
 
 APPROVAL_DECISIONS = [
     "Needs review",
-    "Accept CreditScope",
-    "Accept independent source",
+    "Confirm system value",
+    "Use ACFR value",
     "Manual override",
-    "Exclude source",
+    "Not applicable",
 ]
 
 
@@ -794,10 +794,10 @@ def _comparison_status(field: str, selected_value: Any, independent_value: Any) 
     independent_has_value = _has_value(independent_value)
     if not independent_has_value:
         if selected_has_value:
-            return "awaiting_independent_check", "", ""
-        return "missing_current_value", "", ""
+            return "awaiting_acfr_evidence", "", ""
+        return "missing_system_and_acfr_value", "", ""
     if not selected_has_value:
-        return "independent_candidate_only", "", ""
+        return "acfr_candidate_available", "", ""
 
     selected = _parse_float(selected_value)
     independent = _parse_float(independent_value)
@@ -833,8 +833,71 @@ def _confirmation_checks(methodology_id: str) -> pd.DataFrame:
     return base
 
 
-def _comparison_frame(methodology_id: str) -> pd.DataFrame:
+def _acfr_check_reason(row: pd.Series) -> str:
+    field = str(row.get("field_name", "") or "")
+    status = str(row.get("source_status", "") or "")
+    source = str(row.get("current_source", "") or "")
+    if not _has_value(row.get("current_source_value")):
+        return "Missing system value; locate ACFR or support evidence before manual fallback."
+    if field in {"fixed_cost_burden_ratio", "net_direct_debt_per_capita", "npl_per_capita"}:
+        return "Direct metric; reconcile workbook value to ACFR/debt support where possible."
+    if field in {"gov_operating_margin_3yr_avg", "available_fund_balance_ratio_3yr_avg"}:
+        return "Calculated metric; verify ACFR raw components and three-year scope."
+    if status in {"manual_input", "source_pending", "needs_review"}:
+        return "Current source is manual/pending; ACFR evidence should be tried first."
+    if "CreditScope" in source:
+        return "Workbook-sourced value; tie to ACFR line item before approval."
+    return "ACFR-supported raw field; confirm page, line item, and units."
+
+
+def _is_acfr_relevant(row: pd.Series) -> bool:
+    field = str(row.get("field_name", "") or "")
+    factor = str(row.get("factor", "") or "")
+    preferred = str(row.get("preferred_sources", "") or "")
+    evidence = str(row.get("evidence_target", "") or "")
+    if field in {
+        "fixed_cost_burden_ratio",
+        "net_direct_debt_per_capita",
+        "npl_per_capita",
+        "gov_operating_margin_3yr_avg",
+        "available_fund_balance_ratio_3yr_avg",
+    }:
+        return True
+    if "ACFR" in preferred or "OS" in preferred:
+        return True
+    if "ACFR" in evidence or "debt support" in evidence.lower():
+        return True
+    return factor in {"Financial Performance", "Reserves and Liquidity", "Debt & Liabilities", "Pension", "OPEB"}
+
+
+def _acfr_workbench_frame(methodology_id: str) -> pd.DataFrame:
     checks = _confirmation_checks(methodology_id).copy()
+    if checks.empty:
+        return checks
+    checks["acfr_applicable"] = checks.apply(_is_acfr_relevant, axis=1)
+    checks = checks[checks["acfr_applicable"]].copy()
+    if checks.empty:
+        return checks
+    checks["check_reason"] = checks.apply(_acfr_check_reason, axis=1)
+    checks["has_system_value"] = checks["current_source_value"].map(_has_value)
+    checks["has_acfr_value"] = checks["independent_value"].map(_has_value)
+    checks["check_priority"] = checks.apply(
+        lambda row: (
+            0
+            if not row["has_system_value"]
+            else 1
+            if str(row.get("source_status", "")) in {"manual_input", "source_pending", "needs_review", "missing"}
+            else 2
+            if str(row.get("data_stage", "")) == "direct_metric_candidate"
+            else 3
+        ),
+        axis=1,
+    )
+    return checks.sort_values(["check_priority", "factor", "field_name"]).reset_index(drop=True)
+
+
+def _comparison_frame(methodology_id: str) -> pd.DataFrame:
+    checks = _acfr_workbench_frame(methodology_id).copy()
     if checks.empty:
         return checks
     rows = []
@@ -882,29 +945,26 @@ def _render_step_3_source_map(registry: pd.DataFrame) -> None:
 
 
 def _render_step_4_candidates(methodology_id: str) -> None:
-    checks = _confirmation_checks(methodology_id)
+    checks = _acfr_workbench_frame(methodology_id)
     if checks.empty:
-        st.info("This methodology does not have a source-QA checklist yet.")
+        st.info("No ACFR-supported fields are currently available for this methodology/context.")
         return
     status_counts = checks["source_status"].fillna("unknown").astype(str).value_counts().to_dict() if "source_status" in checks.columns else {}
     has_current_value = checks["current_source_value"].map(_has_value) if "current_source_value" in checks.columns else pd.Series(dtype=bool)
     has_independent_value = checks["independent_value"].map(_has_value) if "independent_value" in checks.columns else pd.Series(dtype=bool)
     cols = st.columns(4)
-    cols[0].metric("Current values", int(has_current_value.sum()))
-    cols[1].metric("Current missing", int((~has_current_value).sum()) if len(has_current_value) else 0)
-    cols[2].metric("Manual / review", int(status_counts.get("manual_input", 0)) + int(status_counts.get("source_pending", 0)) + int(status_counts.get("needs_review", 0)))
-    cols[3].metric("Independent filled", int(has_independent_value.sum()))
-    st.caption("These are pre-formula source fields and direct metric candidates. They are not formula output values.")
+    cols[0].metric("ACFR checks", len(checks))
+    cols[1].metric("System values", int(has_current_value.sum()))
+    cols[2].metric("Need value", int((~has_current_value).sum()) if len(has_current_value) else 0)
+    cols[3].metric("Evidence filled", int(has_independent_value.sum()))
+    st.caption("ACFR is used here as evidence. Confirm page, line item, units, and whether the ACFR value supports the system value.")
     editable_cols = [
         "factor",
         "field_name",
-        "data_stage",
+        "check_reason",
         "current_source_value",
         "current_source",
         "source_status",
-        "candidate_sources",
-        "preferred_sources",
-        "formula_dependency",
         "evidence_target",
         "independent_value",
         "independent_source",
@@ -921,23 +981,20 @@ def _render_step_4_candidates(methodology_id: str) -> None:
             column_config={
                 "factor": st.column_config.TextColumn("factor", disabled=True),
                 "field_name": st.column_config.TextColumn("field_name", disabled=True),
-                "data_stage": st.column_config.TextColumn("data_stage", disabled=True),
-                "current_source_value": st.column_config.TextColumn("current_source_value", disabled=True),
-                "current_source": st.column_config.TextColumn("current_source", disabled=True),
-                "source_status": st.column_config.TextColumn("source_status", disabled=True),
-                "candidate_sources": st.column_config.TextColumn("candidate_sources", disabled=True),
-                "preferred_sources": st.column_config.TextColumn("preferred_sources", disabled=True),
-                "formula_dependency": st.column_config.TextColumn("formula_dependency", disabled=True),
-                "evidence_target": st.column_config.TextColumn("evidence_target", disabled=True),
-                "independent_value": st.column_config.TextColumn("independent_value"),
-                "independent_source": st.column_config.TextColumn("independent_source"),
-                "citation": st.column_config.TextColumn("citation"),
+                "check_reason": st.column_config.TextColumn("why_check", disabled=True),
+                "current_source_value": st.column_config.TextColumn("system_value", disabled=True),
+                "current_source": st.column_config.TextColumn("system_source", disabled=True),
+                "source_status": st.column_config.TextColumn("system_status", disabled=True),
+                "evidence_target": st.column_config.TextColumn("where_to_check", disabled=True),
+                "independent_value": st.column_config.TextColumn("acfr_value"),
+                "independent_source": st.column_config.TextColumn("acfr_line_item"),
+                "citation": st.column_config.TextColumn("acfr_page_or_citation"),
                 "review_note": st.column_config.TextColumn("review_note"),
             },
         )
-        if st.form_submit_button("Save independent source candidates", type="primary"):
+        if st.form_submit_button("Save ACFR evidence checks", type="primary"):
             _save_confirmation_checks(edited)
-            st.success("Independent source candidates saved.")
+            st.success("ACFR evidence checks saved.")
 
 
 def _render_step_5_comparison(methodology_id: str) -> pd.DataFrame:
@@ -949,12 +1006,11 @@ def _render_step_5_comparison(methodology_id: str) -> pd.DataFrame:
     counts = comparison["qa_status"].value_counts().to_dict()
     cols[0].metric("Matched", int(counts.get("matched", 0)))
     cols[1].metric("Differences", int(counts.get("minor_difference", 0)) + int(counts.get("material_difference", 0)))
-    cols[2].metric("Awaiting check", int(counts.get("awaiting_independent_check", 0)))
-    cols[3].metric("Needs value", int(counts.get("missing_current_value", 0)) + int(counts.get("independent_candidate_only", 0)))
+    cols[2].metric("Awaiting ACFR", int(counts.get("awaiting_acfr_evidence", 0)))
+    cols[3].metric("Needs value", int(counts.get("missing_system_and_acfr_value", 0)) + int(counts.get("acfr_candidate_available", 0)))
     show_cols = [
         "factor",
         "field_name",
-        "data_stage",
         "current_source_value",
         "independent_value",
         "difference",
@@ -963,7 +1019,15 @@ def _render_step_5_comparison(methodology_id: str) -> pd.DataFrame:
         "source_status",
         "citation",
     ]
-    st.dataframe(clean_for_display(comparison[[col for col in show_cols if col in comparison.columns]]), width="stretch", hide_index=True)
+    display = comparison[[col for col in show_cols if col in comparison.columns]].rename(
+        columns={
+            "current_source_value": "system_value",
+            "independent_value": "acfr_value",
+            "source_status": "system_status",
+            "citation": "acfr_page_or_citation",
+        }
+    )
+    st.dataframe(clean_for_display(display), width="stretch", hide_index=True)
     st.session_state["data_confirmation_comparison"] = comparison
     return comparison
 
@@ -974,15 +1038,15 @@ def _review_prompt(row: pd.Series) -> str:
         f"Field: {row.get('field_name', '')}\n"
         f"Factor: {row.get('factor', '')}\n"
         f"Data stage: {row.get('data_stage', '')}\n"
-        f"Current source value: {row.get('current_source_value', '')}\n"
-        f"Current source: {row.get('current_source', '')}\n"
+        f"System value: {row.get('current_source_value', '')}\n"
+        f"System source: {row.get('current_source', '')}\n"
         f"Source status: {row.get('source_status', '')}\n"
         f"Formula dependency: {row.get('formula_dependency', '')}\n"
-        f"Independent candidate value: {row.get('independent_value', '')}\n"
-        f"Independent source: {row.get('independent_source', '')}\n"
-        f"Citation: {row.get('citation', '')}\n"
+        f"ACFR value: {row.get('independent_value', '')}\n"
+        f"ACFR line item: {row.get('independent_source', '')}\n"
+        f"ACFR page/citation: {row.get('citation', '')}\n"
         f"Current QA status: {row.get('qa_status', '')}\n\n"
-        "Confirm whether the independent source line item supports this raw field or direct metric candidate, "
+        "Confirm whether the ACFR line item supports this raw field or direct metric candidate, "
         "explain any mismatch before formula calculation, and assign confidence as high / medium / low."
     )
 
@@ -1027,16 +1091,16 @@ def _approval_candidates(approvals: pd.DataFrame) -> pd.DataFrame:
             continue
         approved_value = row.get("approved_value")
         if approved_value is None or str(approved_value).strip() == "":
-            if decision == "Accept independent source":
+            if decision == "Use ACFR value":
                 approved_value = row.get("independent_value")
-            elif decision == "Accept CreditScope":
+            elif decision == "Confirm system value":
                 approved_value = row.get("current_source_value")
         if approved_value is None or str(approved_value).strip() == "":
             continue
         independent_source = str(row.get("independent_source", "") or "").strip()
         source_name = (
-            "CreditScope"
-            if decision == "Accept CreditScope"
+            _source_name_from_text(str(row.get("current_source", "")), fallback="CreditScope")
+            if decision == "Confirm system value"
             else _source_name_from_text(independent_source, fallback="Manual" if decision == "Manual override" else "ACFR")
         )
         rows.append(
@@ -1045,8 +1109,8 @@ def _approval_candidates(approvals: pd.DataFrame) -> pd.DataFrame:
                 "value": approved_value,
                 "source_name": source_name,
                 "source_type": "Document" if source_name not in {"Manual", "BEA", "CensusACS", "CreditScope"} else "",
-                "source_detail": "data_confirmation_approval",
-                "confidence": 0.92 if decision == "Accept independent source" else 0.80,
+                "source_detail": "acfr_confirmation" if decision == "Use ACFR value" else "data_confirmation_approval",
+                "confidence": 0.92 if decision == "Use ACFR value" else 0.80,
                 "source_file": independent_source,
                 "source_cell_or_api": row.get("citation", ""),
                 "source_label": decision,
@@ -1098,8 +1162,8 @@ def _render_step_7_approval(comparison: pd.DataFrame) -> pd.DataFrame:
             column_config={
                 "factor": st.column_config.TextColumn("factor", disabled=True),
                 "field_name": st.column_config.TextColumn("field_name", disabled=True),
-                "current_source_value": st.column_config.TextColumn("current_source_value", disabled=True),
-                "independent_value": st.column_config.TextColumn("independent_value", disabled=True),
+                "current_source_value": st.column_config.TextColumn("system_value", disabled=True),
+                "independent_value": st.column_config.TextColumn("acfr_value", disabled=True),
                 "qa_status": st.column_config.TextColumn("qa_status", disabled=True),
                 "approval_decision": st.column_config.SelectboxColumn(
                     "approval_decision",
@@ -1115,7 +1179,7 @@ def _render_step_7_approval(comparison: pd.DataFrame) -> pd.DataFrame:
             st.session_state["approved_source_candidates"] = approved_candidates
             st.success("Approvals saved.")
             if not approved_candidates.empty:
-                st.caption("Approved independent values will be included as source candidates on the next Save issuer_data run.")
+                st.caption("Approved ACFR/system values will be included as source candidates on the next Save issuer_data run.")
             return edited.copy()
     return approvals
 
@@ -1176,10 +1240,10 @@ def _render_human_workflow_cards() -> None:
     with st.expander("3. Locate evidence for missing fields", expanded=True):
         _render_step_3_source_map(registry)
 
-    with st.expander("4. Resolve pre-formula candidates", expanded=True):
+    with st.expander("4. ACFR evidence check", expanded=True):
         _render_step_4_candidates(methodology_id)
 
-    with st.expander("5. Compare source values", expanded=True):
+    with st.expander("5. Reconcile ACFR vs system value", expanded=True):
         comparison = _render_step_5_comparison(methodology_id)
 
     with st.expander("6. AI review", expanded=False):
