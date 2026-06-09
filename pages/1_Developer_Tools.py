@@ -259,6 +259,7 @@ with tabs[4]:
             st.info("No workbook direct metric debug rows are stored in this session.")
 
     diagnostics = [
+        ("S&P Local Gov formula diagnostics", st.session_state.get("local_gov_formula_diagnostics", pd.DataFrame()), "local_gov_formula_diagnostics.csv"),
         ("Source readiness summary", st.session_state.get("source_readiness_summary", pd.DataFrame()), "source_readiness_summary.csv"),
         ("Source candidates", source_candidates, "source_candidates.csv"),
         ("Source match reports", st.session_state.get("source_match_reports", pd.DataFrame()), "source_match_reports.csv"),

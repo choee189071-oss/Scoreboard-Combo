@@ -381,8 +381,10 @@ with st.container(border=True):
         if methodology_id == "sp_local_gov_k12":
             diagnostics = local_gov_formula_diagnostics(formula_results, issuer_data)
             if not diagnostics.empty:
-                with st.expander("S&P Local Gov key formula diagnostics", expanded=True):
-                    st.dataframe(clean_for_display(diagnostics), width="stretch", hide_index=True)
+                st.session_state["local_gov_formula_diagnostics"] = diagnostics
+                st.caption(
+                    "S&P Local Gov formula diagnostics are available in Developer Tools > Advanced Diagnostics."
+                )
     else:
         st.info("Formula results have not been created yet.")
 
