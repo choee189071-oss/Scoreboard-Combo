@@ -15,7 +15,12 @@ from engine.factor_engine import load_factor_template
 from engine.rating_audit import build_rating_audit_trail
 from engine.rating_engine import run_rating_engine, summarize_rating_output
 try:
-    from utils.data_confirmation import apply_confirmed_inputs_to_issuer_data, evidence_confidence_metrics
+    from utils.data_confirmation import (
+        apply_confirmed_inputs_to_issuer_data,
+        evidence_confidence_metrics,
+        rating_readiness_metrics,
+        render_rating_readiness_overview,
+    )
 except ImportError:
     from utils import data_confirmation as _data_confirmation
 
@@ -35,6 +40,26 @@ except ImportError:
             "verified_fields": 0,
             "verified_denominator": 0,
         }
+
+    def rating_readiness_metrics(methodology_id: str | None = None):
+        helper = getattr(_data_confirmation, "rating_readiness_metrics", None)
+        if callable(helper):
+            return helper(methodology_id)
+        return {
+            "stage": "Unknown",
+            "next_action": "Open Data Confirmation for details.",
+            "raw_source_missing": 0,
+            "formula_blocking_missing": 0,
+            "manual_score_missing": 0,
+            "rating_label": "",
+            "rating_ready": False,
+        }
+
+    def render_rating_readiness_overview(methodology_id: str | None = None, *, expanded: bool = True):
+        _ = expanded
+        metrics = rating_readiness_metrics(methodology_id)
+        st.info(metrics.get("next_action", "Open Data Confirmation for details."))
+        return metrics
 from utils.manual_scores import render_manual_score_editor
 from utils.source_workflow import (
     _direct_metric_debug_frame,
@@ -171,58 +196,21 @@ rating_output = st.session_state.get("rating_output")
 source_counts = source_readiness_counts(source_report)
 formula_counts = status_counts(formula_results, "status")
 rating_result = rating_output.get("rating_result", {}) if isinstance(rating_output, dict) else {}
+methodology_id = st.session_state.get("methodology_id", "moodys_ccd_go")
+readiness = rating_readiness_metrics(methodology_id)
 
 st.subheader("Run Status")
 status_cols = st.columns(4)
-status_cols[0].metric("Source Ready", source_counts.get("independent_ready", 0))
-status_cols[1].metric(
-    "Source Gaps",
-    source_counts.get("missing", 0) + source_counts.get("source_pending", 0) + source_counts.get("needs_review", 0),
-)
-status_cols[2].metric("Formula Ready", formula_counts.get("ready", 0))
-status_cols[3].metric("Rating", rating_result.get("indicative_rating") or "Not run")
-
-if not source_counts:
-    action_panel(
-        "Next step: set up source data",
-        "Use Source Data below to upload a raw workbook, fetch Census/BEA candidates, or fill true manual/source-pending fields.",
-        "warn",
-    )
-elif source_counts.get("missing", 0):
-    action_panel(
-        "Next step: close source gaps",
-        "Data Mapping has saved issuer_data, but required raw fields are still missing. Review the missing list before trusting downstream scores.",
-        "bad",
-    )
-elif not formula_counts:
-    action_panel(
-        "Next step: run Calculators",
-        "The source layer has data. Run the methodology formulas and save formula_results for the Scoreboard.",
-        "good",
-    )
-elif formula_counts.get("missing", 0) or formula_counts.get("error", 0):
-    action_panel(
-        "Next step: fix formula inputs",
-        "Some formulas still need raw fields or returned errors. Use Calculators to identify the exact missing fields.",
-        "warn",
-    )
-elif not rating_result:
-    action_panel(
-        "Next step: run Scoreboard",
-        "Formula results are available. Enter any true qualitative scores and run the rating engine.",
-        "good",
-    )
-else:
-    action_panel(
-        "Workflow run is available",
-        "Review the rating output below. Developer Tools holds validation, audit, and export utilities.",
-        "good",
-    )
+status_cols[0].metric("Current Stage", readiness.get("stage", "Not started"))
+status_cols[1].metric("Formula Blocking Missing", readiness.get("formula_blocking_missing", 0))
+status_cols[2].metric("Manual Score Missing", readiness.get("manual_score_missing", 0))
+status_cols[3].metric("Rating", readiness.get("rating_label") or "Not run")
+panel_kind = "good" if readiness.get("rating_ready") or readiness.get("rating_produced") else "warn"
+action_panel("Next step", str(readiness.get("next_action", "Continue workflow.")), panel_kind)
 
 st.subheader("Main Workflow")
 st.caption("A normal user can stay here: confirm sources, run formulas, enter manual scores, then produce the indicative rating.")
 
-methodology_id = st.session_state.get("methodology_id", "moodys_ccd_go")
 issuer_data = st.session_state.get("issuer_data", {}) or {}
 
 with st.container(border=True):
@@ -282,11 +270,13 @@ with st.container(border=True):
     st.markdown("**1. Source Data**")
     render_source_workflow(methodology_id)
 
+render_rating_readiness_overview(methodology_id, expanded=False)
+
 with st.container(border=True):
-    st.markdown("**Source QA checkpoint**")
+    st.markdown("**Evidence Confidence**")
     st.caption(
-        "Use the separate Data Confirmation page to classify source files, locate ACFR evidence, "
-        "compare independent values, and save human approvals."
+        "Use Data Confirmation after the rating path is clear. ACFR/API/OS evidence validates rating-driving values; "
+        "it is not the same as raw source extraction readiness."
     )
     st.page_link("pages/0_Data_Confirmation.py", label="Open Data Confirmation")
 
@@ -476,8 +466,8 @@ deal_cols[2].metric("Analysis Year", st.session_state.get("analysis_year") or "N
 with st.expander("Session details", expanded=False):
     c1, c2 = st.columns(2)
     with c1:
-        st.write("Raw source readiness")
-        st.caption("Extraction-level status only. Use Data Confirmation to see what actually blocks scoring.")
+        st.write("Source inventory readiness")
+        st.caption("Extraction-level status only. Rating Readiness shows what actually blocks scoring.")
         if source_counts:
             st.dataframe(
                 pd.DataFrame(

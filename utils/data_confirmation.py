@@ -9,6 +9,8 @@ import pandas as pd
 import streamlit as st
 
 from engine.data_sourcing_engine import normalize_source_candidates, required_fields_for_methodology
+from engine.factor_engine import load_factor_template
+from utils.manual_scores import manual_score_candidates
 from utils.ui_helpers import clean_for_display, selected_source_report
 
 
@@ -1538,22 +1540,17 @@ def _evidence_strength(row: pd.Series) -> str:
 def _evidence_relevant(row: pd.Series) -> bool:
     if not _has_value(row.get("current_source_value")):
         return False
-    if str(row.get("requirement_class", "") or "").strip() == "Optional / Contextual":
+    requirement_class = str(row.get("requirement_class", "") or "").strip()
+    if requirement_class == "Optional / Contextual":
         return False
     field = str(row.get("field_name", "") or "")
-    factor = str(row.get("factor", "") or "")
-    preferred = str(row.get("preferred_sources", "") or "")
-    evidence = str(row.get("evidence_target", "") or "")
-    source = str(row.get("current_source", "") or "")
+    if _has_evidence_entered(row):
+        return True
     if field in DIRECT_METRIC_FIELDS:
         return True
-    if "ACFR" in preferred or "OS" in preferred:
+    if requirement_class == "Blocking Required":
         return True
-    if "ACFR" in evidence or "debt support" in evidence.lower():
-        return True
-    if "CreditScope" in source or "Manual" in source:
-        return True
-    return factor in {"Financial Performance", "Reserves and Liquidity", "Debt & Liabilities", "Pension", "OPEB"}
+    return not _parent_direct_metrics(field)
 
 
 def _has_evidence_entered(row: pd.Series | dict[str, Any]) -> bool:
@@ -1572,10 +1569,13 @@ def _has_evidence_entered(row: pd.Series | dict[str, Any]) -> bool:
 
 
 def _evidence_role(row: pd.Series) -> str:
+    field = str(row.get("field_name", "") or "")
     if str(row.get("data_stage", "") or "") == "direct_metric_candidate":
         return "Scoring metric"
     if str(row.get("requirement_class", "") or "") == "Blocking Required":
         return "Blocking input"
+    if not _parent_direct_metrics(field):
+        return "Formula input"
     return "Raw support field"
 
 
@@ -1662,6 +1662,16 @@ def evidence_confidence_metrics(methodology_id: str | None = None) -> dict[str, 
         if isinstance(evidence, pd.DataFrame) and not evidence.empty and "validation_status" in evidence.columns
         else 0
     )
+    awaiting_count = (
+        int(evidence["validation_status"].astype(str).isin({"Awaiting Evidence", "Unverified"}).sum())
+        if isinstance(evidence, pd.DataFrame) and not evidence.empty and "validation_status" in evidence.columns
+        else 0
+    )
+    variance_count = (
+        int(evidence["validation_status"].astype(str).eq("Needs Review").sum())
+        if isinstance(evidence, pd.DataFrame) and not evidence.empty and "validation_status" in evidence.columns
+        else 0
+    )
     evidence_coverage = (evidence_supported / evidence_count * 100) if evidence_count else 0.0
     return {
         "required_fields": required_count,
@@ -1675,8 +1685,196 @@ def evidence_confidence_metrics(methodology_id: str | None = None) -> dict[str, 
         "evidence_coverage_pct": evidence_coverage,
         "verified_fields": verified_required,
         "evidence_verified_fields": verified_count,
+        "evidence_awaiting_fields": awaiting_count,
+        "evidence_variance_fields": variance_count,
         "verified_denominator": required_count,
     }
+
+
+def _manual_score_readiness(methodology_id: str) -> tuple[pd.DataFrame, int, int]:
+    try:
+        template = load_factor_template(methodology_id, templates_dir="templates")
+        candidates = manual_score_candidates(methodology_id, template)
+    except Exception:
+        candidates = pd.DataFrame(columns=["section", "factor", "metric", "formula_id"])
+    if candidates.empty:
+        return candidates, 0, 0
+    stored = st.session_state.get("manual_scores", {}) or {}
+    candidates = candidates.copy()
+
+    def has_score(formula_id: Any) -> bool:
+        value = stored.get(str(formula_id), None) if isinstance(stored, dict) else None
+        if isinstance(value, dict):
+            numeric = value.get("numeric_score")
+        else:
+            numeric = value
+        numeric = pd.to_numeric(numeric, errors="coerce")
+        return pd.notna(numeric)
+
+    candidates["manual_score_status"] = candidates["formula_id"].map(lambda fid: "Entered" if has_score(fid) else "Missing")
+    missing = int(candidates["manual_score_status"].eq("Missing").sum())
+    entered = int(candidates["manual_score_status"].eq("Entered").sum())
+    return candidates, missing, entered
+
+
+def rating_readiness_metrics(methodology_id: str | None = None) -> dict[str, Any]:
+    methodology = methodology_id or st.session_state.get("methodology_id", "moodys_ccd_go")
+    source_report = st.session_state.get("source_report")
+    source_selected = selected_source_report(source_report)
+    raw_missing = raw_pending = raw_ready = 0
+    if isinstance(source_selected, pd.DataFrame) and not source_selected.empty and "readiness_status" in source_selected.columns:
+        raw_counts = source_selected["readiness_status"].fillna("").astype(str).value_counts().to_dict()
+        raw_ready = int(raw_counts.get("independent_ready", 0))
+        raw_missing = int(raw_counts.get("missing", 0))
+        raw_pending = int(raw_counts.get("source_pending", 0) + raw_counts.get("needs_review", 0))
+
+    formula_results = _formula_results_frame()
+    formula_ready = formula_missing = formula_manual = 0
+    if not formula_results.empty and "status" in formula_results.columns:
+        formula_counts = formula_results["status"].fillna("").astype(str).str.lower().value_counts().to_dict()
+        formula_ready = int(formula_counts.get("ready", 0))
+        formula_manual = int(formula_counts.get("manual", 0))
+        formula_missing = int(formula_counts.get("missing", 0) + formula_counts.get("error", 0))
+
+    completeness = _completeness_frame(methodology)
+    blocking = (
+        completeness[completeness["requirement_class"].astype(str).eq("Blocking Required")].copy()
+        if isinstance(completeness, pd.DataFrame) and not completeness.empty and "requirement_class" in completeness.columns
+        else pd.DataFrame()
+    )
+    blocking_missing = (
+        int(blocking["current_status"].astype(str).eq("Missing").sum())
+        if not blocking.empty and "current_status" in blocking.columns
+        else 0
+    )
+    blocking_review = (
+        int(blocking["current_status"].astype(str).eq("Needs Review").sum())
+        if not blocking.empty and "current_status" in blocking.columns
+        else 0
+    )
+
+    manual_rows, manual_missing, manual_entered = _manual_score_readiness(methodology)
+    rating_output = st.session_state.get("rating_output")
+    rating_result = rating_output.get("rating_result", {}) if isinstance(rating_output, dict) else {}
+    rating_label = rating_result.get("indicative_rating") or ""
+
+    has_issuer_data = bool(st.session_state.get("issuer_data") or {})
+    formulas_ran = not formula_results.empty
+    active_manual_missing = manual_missing if formulas_ran else 0
+    active_formula_blockers = formula_missing + blocking_missing if has_issuer_data or formulas_ran else 0
+    active_review_warnings = blocking_review if has_issuer_data or formulas_ran else 0
+    rating_ready = bool(
+        has_issuer_data
+        and formulas_ran
+        and formula_missing == 0
+        and blocking_missing == 0
+        and manual_missing == 0
+    )
+    rating_produced = bool(rating_label)
+
+    if not has_issuer_data:
+        stage = "Data Intake"
+        next_action = "Upload/fetch source data, then save issuer_data."
+    elif not formulas_ran:
+        stage = "Formula Calculation"
+        next_action = "Run formulas from current issuer_data."
+    elif formula_missing or blocking_missing:
+        stage = "Blocking Inputs"
+        next_action = "Resolve formula missing/error rows and Blocking Required fields with no value."
+    elif active_manual_missing:
+        stage = "Manual Scores"
+        next_action = "Enter manual qualitative scores, then run scoreboard."
+    elif not rating_produced:
+        stage = "Scoreboard"
+        next_action = "Run scoreboard from current formula results."
+    else:
+        stage = "Evidence Confidence"
+        next_action = "Rating is produced. Use Evidence Workbench to validate rating-driving values."
+
+    checklist = pd.DataFrame(
+        [
+            {
+                "track": "Data Intake",
+                "check": "Raw source extraction",
+                "status": "Ready" if has_issuer_data else "Not Started",
+                "blocking": "No",
+                "count": f"{raw_ready} ready / {raw_pending} pending / {raw_missing} raw missing",
+                "next_action": "Raw missing fields are evidence/support gaps unless they also appear as Blocking Required.",
+            },
+            {
+                "track": "Rating Readiness",
+                "check": "Formula inputs",
+                "status": "Ready" if formulas_ran and formula_missing == 0 and blocking_missing == 0 else "Needs Work",
+                "blocking": "Yes",
+                "count": f"{formula_ready} ready / {formula_missing if formulas_ran else 0} missing-error / {blocking_missing if has_issuer_data or formulas_ran else 0} blocking missing / {active_review_warnings} review warnings",
+                "next_action": "Run formulas or resolve true missing/error fields. Review warnings move to Evidence Confidence.",
+            },
+            {
+                "track": "Rating Readiness",
+                "check": "Manual scores",
+                "status": "Ready" if active_manual_missing == 0 else "Needs Entry",
+                "blocking": "Yes",
+                "count": f"{manual_entered} entered / {active_manual_missing} active missing",
+                "next_action": "Fill qualitative scores only after formula results exist.",
+            },
+            {
+                "track": "Rating Readiness",
+                "check": "Scoreboard output",
+                "status": "Produced" if rating_produced else "Not Run",
+                "blocking": "Yes",
+                "count": rating_label or "No rating yet",
+                "next_action": "Run scoreboard when formulas and manual scores are ready.",
+            },
+        ]
+    )
+
+    evidence_metrics = evidence_confidence_metrics(methodology)
+    return {
+        "stage": stage,
+        "next_action": next_action,
+        "rating_ready": rating_ready,
+        "rating_produced": rating_produced,
+        "rating_label": rating_label,
+        "raw_source_missing": raw_missing,
+        "raw_source_pending": raw_pending,
+        "formula_ready": formula_ready,
+        "formula_blocking_missing": active_formula_blockers,
+        "blocking_missing": blocking_missing,
+        "blocking_review_warnings": active_review_warnings,
+        "manual_score_missing": active_manual_missing,
+        "manual_score_total_missing": manual_missing,
+        "manual_score_entered": manual_entered,
+        "evidence_awaiting": evidence_metrics.get("evidence_awaiting_fields", 0),
+        "evidence_variance": evidence_metrics.get("evidence_variance_fields", 0),
+        "evidence_verified": evidence_metrics.get("evidence_verified_fields", 0),
+        "checklist": checklist,
+        "manual_rows": manual_rows,
+    }
+
+
+def render_rating_readiness_overview(methodology_id: str | None = None, *, expanded: bool = True) -> dict[str, Any]:
+    metrics = rating_readiness_metrics(methodology_id)
+    with st.container(border=True):
+        st.markdown("**Rating Readiness**")
+        st.caption("This is the main operating view: it separates rating blockers from raw source/evidence work.")
+        cols = st.columns(5)
+        cols[0].metric("Current Stage", metrics["stage"])
+        cols[1].metric("Formula Blocking Missing", metrics["formula_blocking_missing"])
+        cols[2].metric("Manual Score Missing", metrics["manual_score_missing"])
+        cols[3].metric("Evidence Awaiting", metrics["evidence_awaiting"])
+        cols[4].metric("Rating", metrics["rating_label"] or ("Ready to Run" if metrics["rating_ready"] else "Not Ready"))
+        if metrics["rating_ready"] or metrics["rating_produced"]:
+            st.success(metrics["next_action"])
+        else:
+            st.warning(metrics["next_action"])
+        with st.expander("Readiness checklist", expanded=expanded):
+            st.dataframe(clean_for_display(metrics["checklist"]), width="stretch", hide_index=True)
+        if metrics.get("manual_score_missing", 0) and isinstance(metrics.get("manual_rows"), pd.DataFrame) and not metrics["manual_rows"].empty:
+            missing_manual = metrics["manual_rows"][metrics["manual_rows"]["manual_score_status"].astype(str).eq("Missing")]
+            if not missing_manual.empty:
+                with st.expander("Manual scores still needed", expanded=False):
+                    st.dataframe(clean_for_display(missing_manual), width="stretch", hide_index=True)
+    return metrics
 
 
 def _save_confirmation_checks(edited: pd.DataFrame) -> None:
@@ -1820,18 +2018,24 @@ def _render_data_completeness_review(methodology_id: str) -> pd.DataFrame:
     verified = int(counts.get("Verified", 0))
     needs_review = int(counts.get("Needs Review", 0))
     missing = int(counts.get("Missing", 0))
-    completion_rate = (verified / len(blocking) * 100) if len(blocking) else 100.0
+    active_context = bool(st.session_state.get("issuer_data") or {}) or not _formula_results_frame().empty or not _confirmed_inputs_for_context().empty
+    active_missing = missing if active_context else 0
+    active_review = needs_review if active_context else 0
+    completion_rate = (verified / len(blocking) * 100) if active_context and len(blocking) else 100.0
+    completion_label = f"{completion_rate:.0f}%" if active_context else "Not started"
     support_to_check = 0
     if not support.empty and "current_status" in support.columns:
         support_to_check = int(support["current_status"].astype(str).isin({"Missing", "Needs Review"}).sum())
 
     cols = st.columns(5)
-    cols[0].metric("Blocking Required", len(blocking))
+    cols[0].metric("Potential Required", len(blocking))
     cols[1].metric("Blocking Verified", verified)
-    cols[2].metric("Blocking Review", needs_review)
-    cols[3].metric("Blocking Missing", missing)
-    cols[4].metric("Completion Rate", f"{completion_rate:.0f}%")
-    st.caption("Only Blocking Required affects formula readiness. Validation Support is for ACFR/API/workbook double-check and does not block scoring.")
+    cols[2].metric("Active Review", active_review)
+    cols[3].metric("Active Missing", active_missing)
+    cols[4].metric("Completion Rate", completion_label)
+    if not active_context:
+        st.info("No issuer_data or formula results are saved yet. This section is showing the potential field map, not an active missing queue.")
+    st.caption("Only Active Missing affects formula readiness. Validation Support is for ACFR/API/workbook double-check and does not block scoring.")
 
     st.markdown("**Priority Review Queue**")
     st.caption(f"Validation Support rows needing evidence review: {support_to_check}. Optional / Contextual rows are kept visible but non-blocking.")
@@ -1849,7 +2053,11 @@ def _render_data_completeness_review(methodology_id: str) -> pd.DataFrame:
             else:
                 st.dataframe(_queue_display(frame), width="stretch", hide_index=True)
             if label in {"Blocking Required", "Validation Support"}:
-                action_frame = frame[frame["current_status"].astype(str).isin({"Missing", "Needs Review"})].copy()
+                action_frame = (
+                    frame[frame["current_status"].astype(str).isin({"Missing", "Needs Review"})].copy()
+                    if active_context
+                    else pd.DataFrame()
+                )
                 _render_field_review_panels(action_frame, label)
     return completeness
 
@@ -2215,6 +2423,8 @@ def _render_human_workflow_cards() -> None:
     methodology_id = st.session_state.get("methodology_id", "moodys_ccd_go")
     registry = pd.DataFrame()
     approvals = pd.DataFrame()
+
+    render_rating_readiness_overview(methodology_id, expanded=False)
 
     with st.expander("1. Data Collection", expanded=True):
         _render_step_1_context()

@@ -23,7 +23,7 @@ page_header(
 )
 current_context_card()
 
-st.info("Use this before scoring: resolve Blocking Required fields first. Validation Support fields are for ACFR/API/workbook double-check and do not block rating readiness.")
+st.info("Use Rating Readiness first: only true formula blockers must be resolved before scoring. Validation Support is for ACFR/API/workbook double-check and does not block the rating run.")
 st.page_link("streamlit_app.py", label="Open Workflow")
 
 render_data_confirmation_workflow(st.session_state.get("methodology_id", "moodys_ccd_go"))
