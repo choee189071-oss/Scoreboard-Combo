@@ -11,6 +11,12 @@ import pandas as pd
 import streamlit as st
 
 from engine.calculator_engine import calculate_all_formulas
+from engine.acfr_extraction_engine import (
+    extract_all_pdf_pages,
+    normalize_pdf_documents,
+    rank_pdf_snippets_for_field,
+    snippets_to_evidence_text,
+)
 from engine.data_sourcing_engine import normalize_source_candidates, required_fields_for_methodology
 from engine.factor_engine import load_factor_template
 from utils.manual_scores import manual_score_candidates
@@ -20,8 +26,8 @@ from utils.ui_helpers import clean_for_display, selected_source_report
 HUMAN_WORKFLOW_STEPS: List[Dict[str, str]] = [
     {
         "step": "1. Data Collection",
-        "human_action": "Upload workbook, ACFRs, debt support, and fetch API candidates.",
-        "system_action": "Register files and source candidates without making rating judgments.",
+        "human_action": "Upload the CreditScope workbook for scoring inputs; upload ACFR/OS files for evidence support; fetch API candidates when needed.",
+        "system_action": "Register source candidates without letting evidence files overwrite scoring inputs automatically.",
         "decision_output": "Source inventory",
     },
     {
@@ -236,21 +242,50 @@ REQUIREMENT_CLASS_RULES: List[Dict[str, str]] = [
 DATA_CONFIRMATION_LANES: List[Dict[str, str]] = [
     {
         "lane": "A. Rating Path",
-        "purpose": "Only the fields that can stop formulas, manual scores, or scoreboard output.",
+        "purpose": "The only required path for producing or refreshing a rating.",
         "user_question": "Can I produce a rating yet?",
-        "where_to_work": "Rating Readiness and Blocking Required",
+        "where_to_work": "Workflow page, Rating Readiness, Blocking Required, and Manual Scores",
     },
     {
         "lane": "B. Evidence Path",
-        "purpose": "Rating-driving values that already exist but need ACFR/API/workbook support.",
+        "purpose": "Optional validation for rating-driving values that already exist.",
         "user_question": "Can I trust the values that produced the rating?",
         "where_to_work": "Rating Inputs, Evidence Workbench, and AI Evidence Assist",
     },
     {
         "lane": "C. Publish Path",
-        "purpose": "Approved values, review notes, evidence labels, and exportable audit support.",
+        "purpose": "Approved replacements, review notes, evidence labels, and exportable audit support.",
         "user_question": "What value/source should flow into reports and decks?",
         "where_to_work": "Approval Decisions and Publish Outputs",
+    },
+]
+
+
+ACFR_AUTOMATION_PLAN: List[Dict[str, str]] = [
+    {
+        "stage": "1. Register PDFs",
+        "system_behavior": "Store uploaded ACFR files with issuer, fiscal year, document type, and source slot.",
+        "human_control": "Confirm that the file belongs to the current issuer and fiscal year.",
+    },
+    {
+        "stage": "2. Locate candidate pages",
+        "system_behavior": "Search ACFR text/tables for field-specific targets such as fund balance, governmental revenues, debt service, NPL, and pension/OPEB cost.",
+        "human_control": "Review the cited page/table before extraction is trusted.",
+    },
+    {
+        "stage": "3. AI extract structured candidates",
+        "system_behavior": "Call an AI model with the PDF page/table context and return a JSON candidate: field, value, unit, page, line item, confidence, and reasoning.",
+        "human_control": "AI output is candidate evidence only; it cannot approve or change the rating by itself.",
+    },
+    {
+        "stage": "4. Reconcile against system value",
+        "system_behavior": "Compare ACFR candidate vs. current issuer_data/workbook/API value and classify match, minor difference, material variance, or no evidence.",
+        "human_control": "Approve system value, replace with evidence value, or send to review.",
+    },
+    {
+        "stage": "5. Apply approved values",
+        "system_behavior": "Only approved values write back to issuer_data, then formulas rerun and prior scoreboard output is cleared.",
+        "human_control": "Run scoreboard after formula refresh and inspect the audit trail.",
     },
 ]
 
@@ -2567,6 +2602,201 @@ def _render_field_level_ai_cards(methodology_id: str, evidence: pd.DataFrame) ->
                     st.exception(exc)
 
 
+def _uploaded_pdf_documents() -> list[Any]:
+    return normalize_pdf_documents(st.session_state.get("uploaded_pdf_documents", {}))
+
+
+def _pdf_documents_summary() -> pd.DataFrame:
+    rows = [
+        {
+            "source_slot": doc.source_slot,
+            "source_name": doc.source_name,
+            "file_name": doc.file_name,
+            "file_size_mb": len(doc.payload) / 1_000_000,
+        }
+        for doc in _uploaded_pdf_documents()
+    ]
+    return pd.DataFrame(rows)
+
+
+def _pdf_docs_signature(docs: list[Any]) -> tuple[tuple[str, str, int], ...]:
+    return tuple((doc.source_slot, doc.file_name, len(doc.payload)) for doc in docs)
+
+
+def _acfr_pdf_pages_frame() -> pd.DataFrame:
+    docs = _uploaded_pdf_documents()
+    signature = _pdf_docs_signature(docs)
+    cache = st.session_state.get("acfr_pdf_pages_cache")
+    if isinstance(cache, dict) and cache.get("signature") == signature and isinstance(cache.get("pages"), pd.DataFrame):
+        return cache["pages"].copy()
+    pages = extract_all_pdf_pages(docs)
+    st.session_state["acfr_pdf_pages_cache"] = {"signature": signature, "pages": pages.copy()}
+    return pages
+
+
+def _field_option_label(evidence: pd.DataFrame, idx: int) -> str:
+    row = evidence.loc[idx]
+    field = str(row.get("field_name", "") or "")
+    factor = str(row.get("factor", "") or "")
+    value = row.get("system_value", "")
+    status = str(row.get("validation_status", "") or "")
+    return f"{field} | {factor} | system={value} | {status}"
+
+
+def _run_acfr_ai_for_row(row: pd.Series, snippets: pd.DataFrame, model: str) -> dict[str, Any]:
+    evidence_text = snippets_to_evidence_text(snippets)
+    if not evidence_text.strip():
+        raise RuntimeError("No ACFR text snippets were located for this field.")
+    result = _run_ai_evidence_extraction(row, evidence_text, model)
+    if not str(result.get("evidence_source", "") or "").strip():
+        result["evidence_source"] = "ACFR Auto Extraction"
+    reasoning = str(result.get("reasoning", "") or "").strip()
+    result["reasoning"] = f"ACFR Auto Extraction: {reasoning}" if reasoning else "ACFR Auto Extraction located this candidate from uploaded PDF evidence."
+    return result
+
+
+def _render_acfr_auto_extraction(methodology_id: str) -> None:
+    evidence = _evidence_validation_frame(methodology_id)
+    docs_summary = _pdf_documents_summary()
+    st.caption(
+        "This tool searches uploaded ACFR/OS PDFs, sends the most relevant page snippets to AI, and writes candidate evidence values. "
+        "It does not approve values or change issuer_data."
+    )
+    if docs_summary.empty:
+        st.info("No uploaded PDF evidence is available. Upload ACFR/OS PDFs in Workflow > Source Data first.")
+        return
+    with st.expander("Uploaded PDF evidence files", expanded=False):
+        st.dataframe(clean_for_display(docs_summary), width="stretch", hide_index=True)
+
+    pages = _acfr_pdf_pages_frame()
+    if not isinstance(pages, pd.DataFrame) or pages.empty:
+        st.warning("No PDF pages could be read from the uploaded evidence files.")
+        return
+    file_options = sorted(pages["file_name"].dropna().astype(str).unique()) if "file_name" in pages.columns else []
+    selected_files = st.multiselect(
+        "PDF files to search",
+        file_options,
+        default=file_options,
+        help="Use all three ACFRs for trend checks; narrow to the current-year ACFR for current-year debt or pension checks.",
+        key="acfr_auto_selected_pdf_files",
+    )
+    if selected_files:
+        pages = pages[pages["file_name"].astype(str).isin(selected_files)].copy()
+    page_counts = pages["extraction_status"].fillna("unknown").astype(str).value_counts().to_dict()
+    cols = st.columns(4)
+    cols[0].metric("PDF files", len(docs_summary))
+    cols[1].metric("PDF pages", len(pages))
+    cols[2].metric("Text pages", int(page_counts.get("text_ready", 0)))
+    cols[3].metric("Blank/scanned", int(page_counts.get("blank_or_scanned", 0)))
+    if int(page_counts.get("parser_missing", 0)):
+        st.warning("Local PDF extraction requires pypdf. Add it to requirements and redeploy before using ACFR auto extraction.")
+    if "error" in pages.columns:
+        errors = pages[pages["error"].fillna("").astype(str).str.strip().ne("")]
+        if not errors.empty:
+            with st.expander("PDF extraction warnings", expanded=False):
+                st.dataframe(clean_for_display(errors[["file_name", "page_number", "extraction_status", "error"]]), width="stretch", hide_index=True)
+
+    if not isinstance(evidence, pd.DataFrame) or evidence.empty:
+        st.info("No rating input evidence rows are available yet. Save issuer_data and run formulas first.")
+        return
+
+    model = _field_level_ai_model()
+    api_key_available = bool(_openai_api_key())
+    if not api_key_available:
+        st.warning("OPENAI_API_KEY is not configured. Page location works, but AI extraction is disabled.")
+    st.caption(f"AI model: {model}")
+
+    options = list(evidence.index)
+    selected_idx = st.selectbox(
+        "Field to auto-extract from PDFs",
+        options,
+        format_func=lambda idx: _field_option_label(evidence, idx),
+        key="acfr_auto_extract_field_index",
+    )
+    selected_row = evidence.loc[selected_idx]
+    snippets = rank_pdf_snippets_for_field(pages, selected_row, top_n=5)
+    if snippets.empty:
+        st.warning("No candidate PDF pages matched this field. Try a different field or use manual evidence paste.")
+    else:
+        st.markdown("**Located candidate pages**")
+        display_cols = ["file_name", "page_number", "score", "matched_terms", "snippet"]
+        st.dataframe(clean_for_display(snippets[[col for col in display_cols if col in snippets.columns]]), width="stretch", hide_index=True)
+
+    action_cols = st.columns(2)
+    if action_cols[0].button("Save located snippets for selected field", disabled=snippets.empty):
+        st.session_state["last_acfr_auto_snippets"] = snippets.copy()
+        st.success("Located snippets saved in session for review.")
+    if action_cols[1].button(
+        "Run ACFR AI extraction for selected field",
+        type="primary",
+        disabled=snippets.empty or not api_key_available or not model,
+    ):
+        try:
+            with st.spinner(f"Running ACFR AI extraction for {selected_row.get('field_name', '')}..."):
+                result = _run_acfr_ai_for_row(selected_row, snippets, model)
+            _upsert_ai_evidence_result(result)
+            applied = _apply_ai_evidence_results(methodology_id, pd.DataFrame([result]))
+            if applied:
+                st.session_state["data_confirmation_save_notice"] = (
+                    f"ACFR AI candidate applied to Evidence Workbench for {result.get('field_name')}."
+                )
+                st.rerun()
+            st.warning("AI did not find a usable value in the located ACFR snippets. Candidate was saved for review.")
+        except Exception as exc:
+            st.error("ACFR AI extraction failed.")
+            st.exception(exc)
+
+    with st.expander("Batch ACFR extraction", expanded=False):
+        st.caption("Runs the same locate-and-extract process across awaiting evidence rows. Results still require Approval Decisions.")
+        max_fields = st.number_input("Maximum fields this run", min_value=1, max_value=30, value=8, step=1)
+        awaiting = evidence[evidence["validation_status"].astype(str).isin({"Awaiting Evidence", "Unverified", "Needs Review"})].copy()
+        st.write(f"{len(awaiting)} field(s) are eligible for batch extraction.")
+        if st.button("Run ACFR AI extraction for batch", disabled=awaiting.empty or not api_key_available or not model):
+            results: list[dict[str, Any]] = []
+            no_snippet: list[str] = []
+            with st.spinner("Running batch ACFR AI extraction..."):
+                for _, row in awaiting.head(int(max_fields)).iterrows():
+                    field_snippets = rank_pdf_snippets_for_field(pages, row, top_n=5)
+                    if field_snippets.empty:
+                        no_snippet.append(str(row.get("field_name", "")))
+                        continue
+                    try:
+                        result = _run_acfr_ai_for_row(row, field_snippets, model)
+                        results.append(result)
+                    except Exception as exc:
+                        results.append(
+                            {
+                                "selected": False,
+                                "field_name": row.get("field_name", ""),
+                                "factor": row.get("factor", ""),
+                                "system_value": row.get("system_value", ""),
+                                "extracted_value": "",
+                                "unit": "",
+                                "evidence_source": "ACFR Auto Extraction",
+                                "evidence_page": "",
+                                "evidence_line_item": "",
+                                "citation": "",
+                                "confidence": 0.0,
+                                "suggested_action": "Await Evidence",
+                                "reasoning": f"ACFR Auto Extraction failed: {exc}",
+                                "extraction_status": "error",
+                                "model": model,
+                                "last_updated": datetime.now(timezone.utc).isoformat(),
+                            }
+                        )
+            if results:
+                result_frame = pd.DataFrame(results)
+                for _, result in result_frame.iterrows():
+                    _upsert_ai_evidence_result(result.to_dict())
+                applied = _apply_ai_evidence_results(methodology_id, result_frame)
+                st.session_state["data_confirmation_save_notice"] = (
+                    f"ACFR batch extraction created {len(results)} candidate(s); {applied} populated Evidence Workbench."
+                )
+                st.rerun()
+            if no_snippet:
+                st.warning(f"No matching PDF snippets found for: {', '.join(no_snippet[:10])}")
+
+
 def _render_step_4_candidates(methodology_id: str) -> None:
     evidence = _evidence_validation_frame(methodology_id)
     if evidence.empty:
@@ -2591,14 +2821,17 @@ def _render_step_4_candidates(methodology_id: str) -> None:
     st.markdown("**Evidence Workbench**")
     st.caption(
         "This is not the source extraction table. It starts from the value currently feeding the rating path, "
-        "then lets you add independent ACFR/API/OS evidence next to it."
+        "then lets you add independent ACFR/API/OS evidence next to it. Empty evidence means no QA has been run yet, not a rating failure."
     )
     cols = st.columns(4)
     cols[0].metric("Evidence Queue", len(evidence))
     cols[1].metric("Awaiting Evidence", int(validation_counts.get("Awaiting Evidence", 0)) + int(validation_counts.get("Unverified", 0)))
     cols[2].metric("Ready For Approval", len(ready_for_decision))
     cols[3].metric("Needs Review", int(validation_counts.get("Needs Review", 0)))
-    st.caption("Blank evidence means Awaiting Evidence. It does not create a review item until you enter evidence or a variance is detected.")
+    st.caption(
+        "Blank evidence means Awaiting Evidence. It stays outside Approval Decisions until you enter evidence, run AI extraction, "
+        "or a variance/review issue is detected."
+    )
     editable_cols = [
         "priority_class",
         "evidence_role",
@@ -2950,10 +3183,13 @@ def _render_step_5_reconciliation(methodology_id: str) -> pd.DataFrame:
     cols[1].metric("Accept System", int(decisions.get("Accept System Value", 0)))
     cols[2].metric("Replace With Evidence", int(decisions.get("Replace With Evidence Value", 0)))
     cols[3].metric("Send To Review", int(decisions.get("Send To Review", 0)))
-    st.caption("Approval Decisions only shows rows with evidence entered or a real validation result. Awaiting Evidence rows stay out of the review queue.")
+    st.caption(
+        "Approval Decisions only shows rows with evidence entered or a real validation result. "
+        "Awaiting Evidence rows are QA backlog, not rating blockers."
+    )
 
     if active_approvals.empty:
-        st.info("No approval decisions are needed yet. Add evidence in Step 4 when you want to validate or replace a system value.")
+        st.info("No approval decisions are needed yet. Add evidence in Evidence Workbench only when you want to validate or replace a system value.")
         return approvals
 
     with st.form("data_confirmation_approval_form"):
@@ -3089,12 +3325,25 @@ def data_confirmation_export() -> pd.DataFrame:
         ("file_registry_template", SP_LOCAL_GOV_FILE_REGISTRY),
         ("field_checklist", SP_LOCAL_GOV_FIELD_CHECKLIST),
         ("approval_rules", APPROVAL_STATUS_RULES),
+        ("acfr_automation_plan", ACFR_AUTOMATION_PLAN),
     ]
     rows: list[dict[str, Any]] = []
     for section, items in sections:
         for item in items:
             rows.append({"section": section, **item})
     return pd.DataFrame(rows)
+
+
+def _render_acfr_automation_plan() -> None:
+    st.markdown("**ACFR auto-extraction target design**")
+    st.caption(
+        "The current production-safe pattern is candidate extraction first, human approval second, and issuer_data replacement only after approval."
+    )
+    st.dataframe(clean_for_display(_frame(ACFR_AUTOMATION_PLAN)), width="stretch", hide_index=True)
+    st.info(
+        "Recommended API path: use an AI model with PDF/file input or File Search to locate ACFR evidence, "
+        "return structured JSON candidates, then route every candidate through Evidence Workbench and Approval Decisions."
+    )
 
 
 def _render_operating_lanes(methodology_id: str) -> None:
@@ -3119,7 +3368,7 @@ def _render_operating_lanes(methodology_id: str) -> None:
 
     st.markdown("**How this page is organized**")
     st.caption(
-        "Use the left-to-right operating lanes below. Source readiness can show missing support rows; "
+        "A is the scoring path. B and C are quality-control paths. Source inventory can show missing support rows; "
         "only Rating Path blockers stop the score."
     )
     cols = st.columns(3)
@@ -3128,19 +3377,19 @@ def _render_operating_lanes(methodology_id: str) -> None:
             st.markdown("**A. Rating Path**")
             st.write(f"Blocking missing: **{blocking_missing}**")
             st.write(f"Manual missing: **{manual_missing}**")
-            st.caption(str(metrics.get("next_action", "")))
+            st.caption("Use this to produce or refresh the rating. " + str(metrics.get("next_action", "")))
     with cols[1]:
         with st.container(border=True):
             st.markdown("**B. Evidence Path**")
             st.write(f"Verified/support: **{evidence_verified}**")
             st.write(f"Awaiting evidence: **{evidence_awaiting}**")
             st.write(f"Variance/review: **{evidence_variance}**")
-            st.caption(f"{rating_inputs} rating inputs are in scope for evidence checks.")
+            st.caption(f"{rating_inputs} rating inputs are in scope for optional ACFR/API/OS validation.")
     with cols[2]:
         with st.container(border=True):
             st.markdown("**C. Publish Path**")
             st.write(f"Approval rows: **{approval_count}**")
-            st.caption("Only approved values and review notes flow into exports.")
+            st.caption("Only approved values can replace issuer_data or flow into exports.")
 
     if isinstance(evidence, pd.DataFrame) and not evidence.empty:
         source_counts = evidence["evidence_role"].fillna("").astype(str).value_counts().to_dict()
@@ -3159,7 +3408,10 @@ def _render_human_workflow_cards() -> None:
     _render_operating_lanes(methodology_id)
 
     with st.expander("A. Rating Path - required to produce or refresh the rating", expanded=True):
-        st.caption("This is the main workflow. Data enters the formula layer here; B and C are only needed when you want evidence validation or replacements.")
+        st.caption(
+            "This is the main workflow. Data enters the formula layer here; B and C are only needed when you want "
+            "ACFR/API/OS validation or replacements."
+        )
         st.markdown("**A1. Deal and source context**")
         _render_step_1_context()
         registry = _render_step_2_file_registry()
@@ -3173,15 +3425,24 @@ def _render_human_workflow_cards() -> None:
         _render_metric_calculation_checkpoint()
 
     with st.expander("B. Evidence Path - optional ACFR/API/OS validation", expanded=False):
-        st.caption("Use this only when you want to verify or replace values that already feed the rating path.")
+        st.caption(
+            "Use this only when you want to verify or replace values that already feed the rating path. "
+            "Blank evidence is not an error and does not block scoring."
+        )
         st.markdown("**B1. Evidence Workbench**")
         _render_step_4_candidates(methodology_id)
 
-        st.markdown("**B2. Selected-field AI assist**")
+        st.markdown("**B2. ACFR auto extraction**")
+        _render_acfr_auto_extraction(methodology_id)
+
+        st.markdown("**B3. Selected-field AI assist**")
         _render_ai_evidence_assist(methodology_id)
 
     with st.expander("C. Publish Path - approve, apply, and export", expanded=False):
-        st.caption("Use this after evidence has been entered or AI has prefilled candidates.")
+        st.caption(
+            "Use this after evidence has been entered or AI has prefilled candidates. "
+            "Applying approved values recalculates formulas and clears stale scoreboard output."
+        )
         st.markdown("**C1. Approval Decisions**")
         approvals = _render_step_5_reconciliation(methodology_id)
 
@@ -3198,7 +3459,7 @@ def render_data_confirmation_workflow(methodology_id: str) -> None:
         "with ACFR/API/workbook evidence, then approve only the values that should flow into outputs."
     )
 
-    tabs = st.tabs(["Decision Queue", "File Registry", "Field Checklist", "Status Definitions"])
+    tabs = st.tabs(["Decision Queue", "File Registry", "Field Checklist", "ACFR Automation", "Status Definitions"])
     with tabs[0]:
         _render_human_workflow_cards()
         with st.expander("View workflow as table", expanded=False):
@@ -3235,6 +3496,8 @@ def render_data_confirmation_workflow(methodology_id: str) -> None:
             )
         st.dataframe(clean_for_display(checklist), width="stretch", hide_index=True)
     with tabs[3]:
+        _render_acfr_automation_plan()
+    with tabs[4]:
         st.write("Priority class definitions")
         st.dataframe(
             clean_for_display(_frame(REQUIREMENT_CLASS_RULES)),

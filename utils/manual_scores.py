@@ -113,6 +113,24 @@ def render_manual_score_editor(
             "For the West Sacramento fixture, use 2 if you are reproducing the official sample."
         )
 
+    st.markdown("**Manual rating inputs required before scoreboard**")
+    status_cols = st.columns(min(3, max(1, len(rows))))
+    for idx, (_, row) in enumerate(rows.iterrows()):
+        fid = str(row.get("formula_id", "") or "")
+        stored_value = stored.get(fid)
+        if isinstance(stored_value, dict):
+            score = stored_value.get("numeric_score")
+        else:
+            score = stored_value
+        entered = pd.notna(pd.to_numeric(score, errors="coerce"))
+        with status_cols[idx % len(status_cols)]:
+            with st.container(border=True):
+                st.markdown(f"**{row.get('factor') or row.get('metric') or fid}**")
+                st.write(f"`{fid}`")
+                st.metric("Status", "Entered" if entered else "Missing")
+                if entered:
+                    st.caption(f"Current score: {float(score):.2f}")
+
     editor_key = f"{key_prefix}_{methodology_id}"
     edited = st.data_editor(
         rows[["section", "factor", "metric", "formula_id", "formula_status", "numeric_score", "score_label"]],

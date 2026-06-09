@@ -27,6 +27,9 @@ st.info(
     "Start with Rating Readiness. Blocking Required fields affect scoring; Rating Inputs are evidence checks; "
     "Optional / Contextual rows do not block the current bond type."
 )
-st.page_link("streamlit_app.py", label="Open Workflow")
+try:
+    st.page_link("streamlit_app.py", label="Open Workflow")
+except Exception:
+    st.caption("Open Workflow from the sidebar when running this page outside the full Streamlit app.")
 
 render_data_confirmation_workflow(st.session_state.get("methodology_id", "moodys_ccd_go"))

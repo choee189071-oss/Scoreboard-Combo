@@ -6,3 +6,5 @@ plotly
 pydantic
 openai
 python-dotenv
+pypdf
+cryptography

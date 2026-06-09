@@ -90,6 +90,9 @@ DOWNSTREAM_STATE_KEYS = [
     "source_match_reports",
     "uploaded_source_candidates",
     "uploaded_source_reports",
+    "uploaded_pdf_documents",
+    "acfr_pdf_pages_cache",
+    "last_acfr_auto_snippets",
     "api_source_candidates",
     "api_source_reports",
     "manual_source_candidates",
@@ -206,6 +209,30 @@ def local_gov_formula_diagnostics(formula_results: pd.DataFrame, issuer_data: di
     return pd.DataFrame(rows)
 
 
+def render_operating_path_summary(methodology_id: str, readiness: dict) -> None:
+    evidence = evidence_confidence_metrics(methodology_id)
+    rating_label = readiness.get("rating_label") or "Not run"
+    cols = st.columns(3)
+    with cols[0]:
+        with st.container(border=True):
+            st.markdown("**A. Run Rating**")
+            st.write(f"Formula blockers: **{readiness.get('formula_blocking_missing', 0)}**")
+            st.write(f"Manual scores missing: **{readiness.get('manual_score_missing', 0)}**")
+            st.caption("Required path: save issuer_data, run formulas, enter manual scores, run scoreboard.")
+    with cols[1]:
+        with st.container(border=True):
+            st.markdown("**B. Check Evidence**")
+            st.write(f"Awaiting evidence: **{readiness.get('evidence_awaiting', 0)}**")
+            st.write(f"Verified fields: **{evidence.get('verified_fields', 0)} / {evidence.get('verified_denominator', 0)}**")
+            st.caption("Optional QA path: ACFR, OS, API, or workbook evidence validates values already feeding the rating.")
+    with cols[2]:
+        with st.container(border=True):
+            st.markdown("**C. Apply / Publish**")
+            st.write(f"Current rating: **{rating_label}**")
+            st.write(f"Evidence coverage: **{evidence.get('evidence_coverage_pct', 0):.0f}%**")
+            st.caption("Approved evidence can replace issuer_data and rerun formulas before exports.")
+
+
 def clear_downstream_state() -> None:
     for key in DOWNSTREAM_STATE_KEYS:
         st.session_state.pop(key, None)
@@ -247,6 +274,9 @@ status_cols[2].metric("Manual Score Missing", readiness.get("manual_score_missin
 status_cols[3].metric("Rating", readiness.get("rating_label") or "Not run")
 panel_kind = "good" if readiness.get("rating_ready") or readiness.get("rating_produced") else "warn"
 action_panel("Next step", str(readiness.get("next_action", "Continue workflow.")), panel_kind)
+render_operating_path_summary(methodology_id, readiness)
+if st.session_state.get("source_saved_needs_formula_run"):
+    st.warning("issuer_data was updated. Run formulas again before relying on formula results or scoreboard output.")
 
 st.subheader("Main Workflow")
 st.caption("A normal user can stay here: confirm sources, run formulas, enter manual scores, then produce the indicative rating.")
@@ -315,8 +345,8 @@ render_rating_readiness_overview(methodology_id, expanded=False)
 with st.container(border=True):
     st.markdown("**Evidence Confidence**")
     st.caption(
-        "Use Data Confirmation after the rating path is clear. ACFR/API/OS evidence validates rating-driving values; "
-        "it is not the same as raw source extraction readiness."
+        "Use Data Confirmation when you want to verify or replace values after the rating path is working. "
+        "ACFR/API/OS evidence does not change formula inputs until an approved value is applied."
     )
     st.page_link("pages/0_Data_Confirmation.py", label="Open Data Confirmation")
 
@@ -362,6 +392,7 @@ with st.container(border=True):
                 with st.expander("Confirmed inputs applied to formula engine", expanded=True):
                     st.dataframe(clean_for_display(confirmed_formula_inputs), width="stretch", hide_index=True)
             st.success(f"Saved {len(formula_results)} formula results.")
+            st.session_state["source_saved_needs_formula_run"] = False
         except Exception as exc:
             st.error("Could not run formulas from issuer_data.")
             st.exception(exc)
@@ -372,12 +403,25 @@ with st.container(border=True):
     formula_counts = status_counts(formula_results, "status")
     if formula_counts:
         formula_action(formula_counts)
-        show_cols = ["formula_id", "formula_name", "category", "status", "value", "missing_fields", "warning", "error"]
+        show_cols = ["formula_id", "formula_name", "category", "status", "value", "missing_fields", "error"]
         st.dataframe(
             clean_for_display(formula_results[[c for c in show_cols if c in formula_results.columns]]),
             width="stretch",
             hide_index=True,
         )
+        if "warning" in formula_results.columns:
+            warning_rows = formula_results[formula_results["warning"].fillna("").astype(str).str.strip().ne("")]
+            if not warning_rows.empty:
+                with st.expander("Formula notes and source warnings", expanded=False):
+                    st.caption(
+                        "These notes explain source provenance or review hints. Developer-level direct metric diagnostics live in Developer Tools."
+                    )
+                    note_cols = ["formula_id", "status", "value", "warning"]
+                    st.dataframe(
+                        clean_for_display(warning_rows[[c for c in note_cols if c in warning_rows.columns]]),
+                        width="stretch",
+                        hide_index=True,
+                    )
         if methodology_id == "sp_local_gov_k12":
             diagnostics = local_gov_formula_diagnostics(formula_results, issuer_data)
             if not diagnostics.empty:

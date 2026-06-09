@@ -12,7 +12,7 @@ from openpyxl import load_workbook
 from connectors.bea_api import BeaApiError, fetch_bea_source_candidates, supported_bea_candidate_fields
 from connectors.census_api import CensusApiError, fetch_census_source_candidates, supported_census_candidate_fields
 from connectors.creditscope_loader import load_creditscope_source_candidates
-from engine.calculator_engine import load_formula_library, parse_required_fields
+from engine.calculator_engine import calculate_all_formulas, load_formula_library, parse_required_fields
 from engine.data_sourcing_engine import (
     mapping_report_to_source_candidates,
     manual_data_to_source_candidates,
@@ -33,6 +33,9 @@ SOURCE_SESSION_KEYS = {
     "uploaded_source_candidates",
     "uploaded_source_reports",
     "uploaded_sources",
+    "uploaded_pdf_documents",
+    "acfr_pdf_pages_cache",
+    "last_acfr_auto_snippets",
     "uploaded_issuer_data",
     "api_source_candidates",
     "api_source_reports",
@@ -48,9 +51,9 @@ SOURCE_WORKFLOW_CACHE_VERSION = "direct-metrics-cache-v3"
 SOURCE_WORKFLOW_GUIDE: list[dict[str, str]] = [
     {
         "section": "Source uploads",
-        "what_it_does": "Registers files and extracts source candidates when the file is mappable.",
+        "what_it_does": "Registers files and extracts source candidates when the file is mappable. CreditScope workbook values feed scoring after Save issuer_data.",
         "when_to_use": "Start here for CreditScope workbook, ACFR, official statement/debt support, or IPEDS files.",
-        "what_it_does_not_do": "It does not select final issuer_data or run formulas by itself.",
+        "what_it_does_not_do": "ACFR/OS PDFs are evidence files. They do not automatically replace formula inputs until evidence is approved and applied.",
     },
     {
         "section": "API candidates",
@@ -188,6 +191,7 @@ def _reset_source_session(methodology_id: str) -> None:
         if str(key).startswith(("upload_", "sheet_", "manual_source_editor_", "api_fetch_")):
             st.session_state.pop(key, None)
     st.session_state["uploaded_sources"] = {}
+    st.session_state["uploaded_pdf_documents"] = {}
     st.session_state["uploaded_source_candidates"] = {}
     st.session_state["uploaded_source_reports"] = {}
     st.session_state["uploaded_issuer_data"] = {}
@@ -477,8 +481,8 @@ def _readiness_tabs(source_report: pd.DataFrame) -> None:
         "needs_review": "support_review",
     }
     st.caption(
-        "Source inventory only: this is pre-formula extraction coverage. Missing rows here are raw support gaps, "
-        "not rating blockers when a direct metric already feeds the formula."
+        "Support inventory only: this is pre-formula extraction coverage. Support Missing rows are raw evidence gaps, "
+        "not rating blockers when a direct metric or formula-ready value already feeds scoring."
     )
     st.dataframe(
         pd.DataFrame(
@@ -538,6 +542,53 @@ def _uploaded_sources_summary() -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _save_uploaded_pdf_document(source_slot: str, source_name: str, file_name: str, payload: bytes) -> None:
+    store = st.session_state.setdefault("uploaded_pdf_documents", {})
+    docs = list(store.get(source_slot, []))
+    incoming_size = len(payload or b"")
+    docs = [
+        doc
+        for doc in docs
+        if not (
+            str(doc.get("file_name", "")) == file_name
+            and int(doc.get("file_size", -1) or -1) == incoming_size
+        )
+    ]
+    docs.append(
+        {
+            "source_slot": source_slot,
+            "source_name": source_name,
+            "file_name": file_name,
+            "file_size": incoming_size,
+            "payload": payload,
+        }
+    )
+    store[source_slot] = docs
+    st.session_state["uploaded_pdf_documents"] = store
+
+
+def _methodology_formula_results(methodology_id: str, formula_results: pd.DataFrame) -> pd.DataFrame:
+    if not isinstance(formula_results, pd.DataFrame) or formula_results.empty:
+        return pd.DataFrame()
+    try:
+        template = load_factor_template(methodology_id, templates_dir="templates")
+    except Exception:
+        return formula_results.copy()
+    if template.empty or "formula_id" not in template.columns or "formula_id" not in formula_results.columns:
+        return formula_results.copy()
+    ids = set(template["formula_id"].dropna().astype(str))
+    return formula_results[formula_results["formula_id"].astype(str).isin(ids)].copy()
+
+
+def _run_formulas_after_source_save(methodology_id: str, issuer_data: dict[str, Any]) -> pd.DataFrame:
+    formula_results = calculate_all_formulas(issuer_data)
+    st.session_state["formula_results"] = formula_results
+    st.session_state["methodology_formula_results"] = _methodology_formula_results(methodology_id, formula_results)
+    st.session_state["rating_output"] = None
+    st.session_state["source_saved_needs_formula_run"] = False
+    return formula_results
+
+
 def render_source_workflow(methodology_id: str) -> None:
     if st.session_state.get("source_methodology_id") != methodology_id:
         st.session_state["api_source_candidates"] = {}
@@ -547,6 +598,7 @@ def render_source_workflow(methodology_id: str) -> None:
         st.session_state["approved_source_candidates"] = pd.DataFrame()
         st.session_state["source_methodology_id"] = methodology_id
     st.session_state.setdefault("uploaded_sources", {})
+    st.session_state.setdefault("uploaded_pdf_documents", {})
     st.session_state.setdefault("uploaded_source_candidates", {})
     st.session_state.setdefault("uploaded_source_reports", {})
     st.session_state.setdefault("uploaded_issuer_data", {})
@@ -575,7 +627,10 @@ def render_source_workflow(methodology_id: str) -> None:
 
     with st.container(border=True):
         st.markdown("**Source uploads**")
-        st.caption("Upload source files for mapping or source QA. PDF support is available for ACFR and debt-support review.")
+        st.caption(
+            "Upload source files for the Rating Path and Evidence Path. CreditScope workbooks can feed issuer_data; "
+            "ACFR/OS PDFs are registered as evidence and will not change formula inputs until approved and applied."
+        )
         saved_uploads = _uploaded_sources_summary()
         if not saved_uploads.empty:
             st.success("Uploaded files are saved in this Streamlit session. Upload widgets may rerun the page, but these files remain available until Reset source session.")
@@ -602,7 +657,7 @@ def render_source_workflow(methodology_id: str) -> None:
                 "source_name": "OS",
                 "label": "Official Statement / debt support",
                 "types": ["pdf", "csv", "xlsx", "xls"],
-                "caption": "Upload one or more PDF/CSV/XLSX/XLS files. PDFs are registered for Source QA.",
+                "caption": "Upload one or more PDF/CSV/XLSX/XLS files. PDFs are evidence support and do not auto-replace scoring inputs.",
                 "multiple": True,
             },
             {
@@ -610,7 +665,7 @@ def render_source_workflow(methodology_id: str) -> None:
                 "source_name": "ACFR",
                 "label": "ACFR / Audit extract",
                 "types": ["pdf", "csv", "xlsx", "xls"],
-                "caption": "Upload one or more PDF/CSV/XLSX/XLS files. PDFs are registered for Source QA.",
+                "caption": "Upload one or more PDF/CSV/XLSX/XLS files. ACFR PDFs are evidence support until approved in Data Confirmation.",
                 "multiple": True,
             },
         ]
@@ -644,6 +699,7 @@ def render_source_workflow(methodology_id: str) -> None:
                             file_names.append(file_name)
                             if Path(file_name).suffix.lower() == ".pdf":
                                 pdf_count += 1
+                                _save_uploaded_pdf_document(key, source_name, file_name, payload)
                                 continue
 
                             if source_name == "CreditScope":
@@ -821,9 +877,11 @@ def render_source_workflow(methodology_id: str) -> None:
                         "category": st.column_config.TextColumn("category", disabled=True),
                     },
                 )
-            save_sources = st.form_submit_button("Save issuer_data", type="primary")
+            button_cols = st.columns(2)
+            save_sources = button_cols[0].form_submit_button("Save issuer_data", type="primary")
+            save_and_run = button_cols[1].form_submit_button("Save issuer_data and run formulas")
 
-        if save_sources:
+        if save_sources or save_and_run:
             manual_values = dict(st.session_state.get("manual_source_values", {}) or {})
             manual_values.update(_clean_manual_values(edited_manual))
             st.session_state["manual_source_values"] = manual_values
@@ -864,6 +922,7 @@ def render_source_workflow(methodology_id: str) -> None:
                 st.session_state["source_readiness_summary"] = result["source_readiness_summary"]
                 st.session_state["workbook_direct_metric_debug"] = direct_metric_debug
                 _clear_formula_rating_outputs()
+                st.session_state["source_saved_needs_formula_run"] = True
                 reports = []
                 reports.extend(st.session_state.get("uploaded_source_reports", {}).values())
                 reports.extend(st.session_state.get("api_source_reports", {}).values())
@@ -878,7 +937,11 @@ def render_source_workflow(methodology_id: str) -> None:
                         f"{len(direct_metric_debug)} workbook direct metric(s) applied to issuer_data. "
                         "Full debug details are in Developer Tools > Advanced Diagnostics."
                     )
+                if save_and_run:
+                    formula_results = _run_formulas_after_source_save(methodology_id, issuer_data)
+                    st.success(f"Ran formulas from the saved issuer_data. {len(formula_results)} formula rows saved.")
+                else:
+                    st.info("Formula and scoreboard outputs were cleared. Run formulas next, or use Save issuer_data and run formulas.")
 
-    with st.container(border=True):
-        st.markdown("**Source inventory readiness (support coverage, not rating blockers)**")
+    with st.expander("Support inventory readiness (advanced, not rating blockers)", expanded=False):
         _readiness_tabs(st.session_state.get("source_report", pd.DataFrame()))
