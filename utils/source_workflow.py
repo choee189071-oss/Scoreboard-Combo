@@ -470,26 +470,48 @@ def _readiness_tabs(source_report: pd.DataFrame) -> None:
         return
     selected = selected_source_report(source_report)
     counts = source_readiness_counts(source_report)
-    st.caption("Source inventory only: this shows extraction coverage before formulas. It is not the rating blocker list.")
+    status_labels = {
+        "missing": "support_missing (non-blocking unless also a formula blocker)",
+        "independent_ready": "independent_ready",
+        "source_pending": "support_pending",
+        "needs_review": "support_review",
+    }
+    st.caption(
+        "Source inventory only: this is pre-formula extraction coverage. Missing rows here are raw support gaps, "
+        "not rating blockers when a direct metric already feeds the formula."
+    )
     st.dataframe(
-        pd.DataFrame([{"readiness_status": key, "field_count": value} for key, value in counts.items()]),
+        pd.DataFrame(
+            [
+                {
+                    "inventory_status": status_labels.get(key, key),
+                    "field_count": value,
+                }
+                for key, value in counts.items()
+            ]
+        ),
         width="stretch",
         hide_index=True,
     )
     missing = selected[selected["readiness_status"].astype(str).eq("missing")]
     ready = selected[selected["readiness_status"].astype(str).eq("independent_ready")]
     review = selected[selected["readiness_status"].astype(str).isin(["source_pending", "needs_review"])]
-    tabs = st.tabs(["Inventory Missing", "Inventory Ready", "Inventory Review", "All Selected"])
-    for tab, frame, empty in [
-        (tabs[0], missing, "No missing selected fields."),
+    tabs = st.tabs(["Support Missing", "Inventory Ready", "Inventory Review", "All Selected"])
+    for idx, (tab, frame, empty) in enumerate([
+        (tabs[0], missing, "No missing support fields."),
         (tabs[1], ready, "No independently ready fields yet."),
         (tabs[2], review, "No source-pending or review fields."),
         (tabs[3], selected, "No selected source rows."),
-    ]:
+    ]):
         with tab:
             if frame.empty:
                 st.info(empty)
             else:
+                if idx == 0:
+                    st.info(
+                        "These fields were not separately extracted from the raw source inventory. "
+                        "They do not block scoring if an equivalent direct metric is already present in issuer_data."
+                    )
                 st.dataframe(clean_for_display(frame), width="stretch", hide_index=True)
 
 
@@ -856,5 +878,5 @@ def render_source_workflow(methodology_id: str) -> None:
                         st.dataframe(clean_for_display(direct_metric_debug), width="stretch", hide_index=True)
 
     with st.container(border=True):
-        st.markdown("**Source inventory readiness**")
+        st.markdown("**Source inventory readiness (support coverage, not rating blockers)**")
         _readiness_tabs(st.session_state.get("source_report", pd.DataFrame()))

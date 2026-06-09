@@ -118,6 +118,15 @@ LOCAL_GOV_DIAGNOSTIC_NOTES = {
 }
 
 
+def _direct_metric_source_label(formula_id: str, result: pd.Series, issuer_data: dict) -> str:
+    warning = str(result.get("warning", "") or "")
+    if formula_id in issuer_data and issuer_data.get(formula_id) not in (None, ""):
+        if "Direct source metric value supplied" in warning:
+            return "Direct metric override"
+        return "Direct metric in issuer_data"
+    return "Formula derived from raw components"
+
+
 def local_gov_formula_diagnostics(formula_results: pd.DataFrame, issuer_data: dict) -> pd.DataFrame:
     if not isinstance(formula_results, pd.DataFrame) or formula_results.empty:
         return pd.DataFrame()
@@ -133,23 +142,53 @@ def local_gov_formula_diagnostics(formula_results: pd.DataFrame, issuer_data: di
         missing_fields = str(result.get("missing_fields", "") or "")
         status = str(result.get("status", "") or "")
         value = result.get("value")
+        source_used = _direct_metric_source_label(formula_id, result, issuer_data)
+        uses_direct_metric = source_used != "Formula derived from raw components"
 
         if status == "missing":
             diagnosis = f"Missing required field(s): {missing_fields or 'unknown'}."
         elif formula_id == "npl_per_capita":
             has_npl = issuer_data.get("net_pension_liability") not in (None, "")
             has_population = issuer_data.get("issuer_population") not in (None, "")
-            diagnosis = "Ready. Check NPL unit and issuer_population denominator if sample variance remains."
-            if not has_npl or not has_population:
-                diagnosis = "Needs net_pension_liability and issuer_population; do not substitute county population silently."
+            if uses_direct_metric:
+                missing_support = [
+                    field
+                    for field, present in [
+                        ("net_pension_liability", has_npl),
+                        ("issuer_population", has_population),
+                    ]
+                    if not present
+                ]
+                diagnosis = (
+                    "Ready via direct metric override. "
+                    + (
+                        f"Raw support component(s) not separately sourced: {', '.join(missing_support)}."
+                        if missing_support
+                        else "Raw support components are also available."
+                    )
+                )
+            else:
+                diagnosis = "Ready. Check NPL unit and issuer_population denominator if sample variance remains."
+                if not has_npl or not has_population:
+                    diagnosis = "Needs net_pension_liability and issuer_population; do not substitute county population silently."
         elif formula_id == "fixed_cost_burden_ratio":
             cost_fields = ["debt_service", "pension_cost", "opeb_cost", "governmental_revenue"]
             missing_cost_fields = [field for field in cost_fields if issuer_data.get(field) in (None, "")]
-            diagnosis = (
-                "Ready. Verify pension_cost and opeb_cost are included in the same dollar unit as debt_service."
-                if not missing_cost_fields
-                else f"Missing/blank component(s): {', '.join(missing_cost_fields)}."
-            )
+            if uses_direct_metric:
+                diagnosis = (
+                    "Ready via direct metric override. "
+                    + (
+                        f"Raw support component(s) not separately sourced: {', '.join(missing_cost_fields)}."
+                        if missing_cost_fields
+                        else "Raw support components are also available."
+                    )
+                )
+            else:
+                diagnosis = (
+                    "Ready. Verify pension_cost and opeb_cost are included in the same dollar unit as debt_service."
+                    if not missing_cost_fields
+                    else f"Missing/blank component(s): {', '.join(missing_cost_fields)}."
+                )
         else:
             diagnosis = "Ready. Compare live BEA/Census geography against the official workbook denominator."
 
@@ -158,6 +197,7 @@ def local_gov_formula_diagnostics(formula_results: pd.DataFrame, issuer_data: di
                 "formula_id": formula_id,
                 "status": status,
                 "value": value,
+                "source_used": source_used,
                 "missing_fields": missing_fields,
                 "diagnosis": diagnosis,
                 "why_it_matters": note,
