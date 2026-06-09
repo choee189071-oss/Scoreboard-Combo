@@ -38,6 +38,7 @@ SOURCE_SESSION_KEYS = {
     "api_source_reports",
     "manual_source_candidates",
     "manual_source_values",
+    "approved_source_candidates",
     "workbook_direct_metric_debug",
 }
 
@@ -165,6 +166,7 @@ def _reset_source_session(methodology_id: str) -> None:
     st.session_state["api_source_candidates"] = {}
     st.session_state["api_source_reports"] = {}
     st.session_state["manual_source_values"] = {}
+    st.session_state["approved_source_candidates"] = pd.DataFrame()
     st.session_state["source_reset_notice"] = "Source session reset. Upload/fetch sources again before saving issuer_data."
     st.session_state["source_methodology_id"] = methodology_id
 
@@ -468,6 +470,7 @@ def render_source_workflow(methodology_id: str) -> None:
         st.session_state["api_source_reports"] = {}
         st.session_state["uploaded_source_candidates"] = {}
         st.session_state["uploaded_source_reports"] = {}
+        st.session_state["approved_source_candidates"] = pd.DataFrame()
         st.session_state["source_methodology_id"] = methodology_id
     st.session_state.setdefault("uploaded_sources", {})
     st.session_state.setdefault("uploaded_source_candidates", {})
@@ -476,6 +479,7 @@ def render_source_workflow(methodology_id: str) -> None:
     st.session_state.setdefault("api_source_candidates", {})
     st.session_state.setdefault("api_source_reports", {})
     st.session_state.setdefault("manual_source_values", {})
+    st.session_state.setdefault("approved_source_candidates", pd.DataFrame())
 
     required_names = list(_cached_required_names(methodology_id))
     required_df = _complete_required_field_frame(_required_field_frame(methodology_id), required_names)
@@ -757,6 +761,9 @@ def render_source_workflow(methodology_id: str) -> None:
             if not manual_candidates.empty:
                 frames.append(manual_candidates)
                 st.session_state["manual_source_candidates"] = manual_candidates
+            approved_candidates = st.session_state.get("approved_source_candidates")
+            if isinstance(approved_candidates, pd.DataFrame) and not approved_candidates.empty:
+                frames.append(approved_candidates)
             if not frames:
                 st.warning("No source candidates are available yet.")
             else:

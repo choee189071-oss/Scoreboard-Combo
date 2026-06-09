@@ -48,6 +48,7 @@ DOWNSTREAM_STATE_KEYS = [
     "api_source_reports",
     "manual_source_candidates",
     "manual_source_values",
+    "approved_source_candidates",
     "formula_results",
     "methodology_formula_results",
     "rating_output",

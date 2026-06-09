@@ -18,12 +18,12 @@ init_state()
 
 page_header(
     "Data Confirmation",
-    "A source QA workpaper for file classification, ACFR evidence, independent value checks, AI review prompts, and human approval.",
+    "A pre-formula source QA workspace for missing fields, ACFR evidence, independent value checks, AI review prompts, and human approval.",
     "data_confirmation",
 )
 current_context_card()
 
-st.info("Upload source files in Workflow > Source Data first, then use this page to confirm data quality before publishing outputs.")
+st.info("Use this before formulas: upload files and fetch API candidates in Workflow, resolve missing/source-pending fields here, then save issuer_data and run scoring.")
 st.page_link("streamlit_app.py", label="Open Workflow")
 
 render_data_confirmation_workflow(st.session_state.get("methodology_id", "moodys_ccd_go"))
