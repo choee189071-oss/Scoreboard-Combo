@@ -18,12 +18,15 @@ init_state()
 
 page_header(
     "Data Confirmation",
-    "Operational validation workflow for missing fields, evidence entry, confirmed values, and clean rating-engine inputs.",
+    "Decision queue for true rating blockers, ACFR/API evidence checks, AI extraction, and approved values.",
     "data_confirmation",
 )
 current_context_card()
 
-st.info("Use Rating Readiness first: only true formula blockers must be resolved before scoring. Validation Support is for ACFR/API/workbook double-check and does not block the rating run.")
+st.info(
+    "Start with Rating Readiness. Blocking Required fields affect scoring; Rating Inputs are evidence checks; "
+    "Optional / Contextual rows do not block the current bond type."
+)
 st.page_link("streamlit_app.py", label="Open Workflow")
 
 render_data_confirmation_workflow(st.session_state.get("methodology_id", "moodys_ccd_go"))

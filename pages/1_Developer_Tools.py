@@ -20,6 +20,7 @@ from engine.rating_audit import (
     build_rating_audit_trail,
 )
 from engine.rating_engine import summarize_rating_output
+from engine.regression_engine import run_synthetic_clean_data_regression
 from utils.data_confirmation import data_confirmation_export
 from utils.ui_helpers import clean_for_display, current_context_card, init_state, page_header
 
@@ -51,7 +52,7 @@ source_report = st.session_state.get("source_report", pd.DataFrame())
 formula_results = st.session_state.get("formula_results", pd.DataFrame())
 rating_output = st.session_state.get("rating_output")
 
-tabs = st.tabs(["Methodology Audit", "Session Export", "Data Confirmation", "Session State"])
+tabs = st.tabs(["Methodology Audit", "Clean Data Simulation", "Session Export", "Data Confirmation", "Session State"])
 
 with tabs[0]:
     st.subheader("Structural Audit")
@@ -97,6 +98,52 @@ with tabs[0]:
     _download_dataframe("Download methodology_audit.csv", audit_df, "methodology_audit.csv")
 
 with tabs[1]:
+    st.subheader("Clean Data Simulation")
+    st.caption(
+        "Runs every active bond type with complete synthetic data. This tests formula/factor/rating wiring, "
+        "not official scorecard matching or source extraction accuracy."
+    )
+    if st.button("Run clean-data regression", type="primary"):
+        with st.spinner("Running synthetic clean-data regression..."):
+            st.session_state["clean_data_regression"] = run_synthetic_clean_data_regression()
+    regression = st.session_state.get("clean_data_regression")
+    if isinstance(regression, pd.DataFrame) and not regression.empty:
+        status_counts = regression["status"].fillna("").astype(str).value_counts().to_dict()
+        cols = st.columns(4)
+        cols[0].metric("Methodologies", len(regression))
+        cols[1].metric("PASS", int(status_counts.get("PASS", 0)))
+        cols[2].metric("FAIL", int(status_counts.get("FAIL", 0)))
+        cols[3].metric("ERROR", int(status_counts.get("ERROR", 0)))
+        show_cols = [
+            "status",
+            "bond_type",
+            "methodology_id",
+            "raw_ready",
+            "raw_manual",
+            "raw_missing",
+            "raw_error",
+            "rating",
+            "weighted_score",
+            "coverage",
+            "warnings",
+            "metrics_ready",
+            "metrics_missing",
+            "metrics_error",
+            "metrics_need_score",
+            "bad_formula_ids",
+            "bad_metric_ids",
+            "error",
+        ]
+        st.dataframe(
+            clean_for_display(regression[[col for col in show_cols if col in regression.columns]]),
+            width="stretch",
+            hide_index=True,
+        )
+        _download_dataframe("Download clean_data_regression.csv", regression, "clean_data_regression.csv")
+    else:
+        st.info("Run the simulation to confirm the clean-data path for all active bond types.")
+
+with tabs[2]:
     st.subheader("Exports")
     cols = st.columns(4)
     cols[0].metric("Issuer Fields", len(issuer_data))
@@ -174,13 +221,13 @@ with tabs[1]:
         else:
             st.info("No rating_output saved.")
 
-with tabs[2]:
+with tabs[3]:
     st.subheader("Data Confirmation Plan")
     plan_df = data_confirmation_export()
     st.dataframe(clean_for_display(plan_df), width="stretch", hide_index=True)
     _download_dataframe("Download data_confirmation_plan.csv", plan_df, "data_confirmation_plan.csv")
 
-with tabs[3]:
+with tabs[4]:
     st.subheader("Current Session Preview")
     if issuer_data:
         with st.expander("issuer_data", expanded=False):

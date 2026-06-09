@@ -232,6 +232,27 @@ REQUIREMENT_CLASS_RULES: List[Dict[str, str]] = [
     },
 ]
 
+DATA_CONFIRMATION_LANES: List[Dict[str, str]] = [
+    {
+        "lane": "A. Rating Path",
+        "purpose": "Only the fields that can stop formulas, manual scores, or scoreboard output.",
+        "user_question": "Can I produce a rating yet?",
+        "where_to_work": "Rating Readiness and Blocking Required",
+    },
+    {
+        "lane": "B. Evidence Path",
+        "purpose": "Rating-driving values that already exist but need ACFR/API/workbook support.",
+        "user_question": "Can I trust the values that produced the rating?",
+        "where_to_work": "Rating Inputs, Evidence Workbench, and AI Evidence Assist",
+    },
+    {
+        "lane": "C. Publish Path",
+        "purpose": "Approved values, review notes, evidence labels, and exportable audit support.",
+        "user_question": "What value/source should flow into reports and decks?",
+        "where_to_work": "Approval Decisions and Publish Outputs",
+    },
+]
+
 
 WEST_SACRAMENTO_SOURCE_MAP: List[Dict[str, str]] = [
     {
@@ -2211,6 +2232,7 @@ def _queue_display(frame: pd.DataFrame) -> pd.DataFrame:
         "field_name",
         "factor",
         "requirement_class",
+        "data_stage",
         "requirement_reason",
         "expected_source",
         "current_status",
@@ -2225,6 +2247,7 @@ def _queue_display(frame: pd.DataFrame) -> pd.DataFrame:
             "field_name": "Field",
             "factor": "Factor",
             "requirement_class": "Priority Class",
+            "data_stage": "Data Stage",
             "requirement_reason": "Why This Class",
             "expected_source": "Expected Source",
             "current_status": "Current Status",
@@ -2331,20 +2354,26 @@ def _render_data_completeness_review(methodology_id: str) -> pd.DataFrame:
     if not support.empty and "current_status" in support.columns:
         support_to_check = int(support["current_status"].astype(str).isin({"Missing", "Needs Review"}).sum())
 
+    verified_df = completeness[completeness["current_status"].astype(str).eq("Verified")].copy()
     cols = st.columns(5)
-    cols[0].metric("Potential Required", len(blocking))
-    cols[1].metric("Blocking Verified", verified)
-    cols[2].metric("Active Review", active_review)
-    cols[3].metric("Active Missing", active_missing)
-    cols[4].metric("Completion Rate", completion_label)
+    cols[0].metric("Rating Blockers", active_missing)
+    cols[1].metric("Blocking Review", active_review)
+    cols[2].metric("Blocking Verified", verified)
+    cols[3].metric("Rating Inputs to Validate", len(support))
+    cols[4].metric("Blocking Completion", completion_label)
     if not active_context:
         st.info("No issuer_data or formula results are saved yet. This section is showing the potential field map, not an active missing queue.")
-    st.caption("Only Active Missing affects formula readiness. Validation Support is for ACFR/API/workbook double-check and does not block scoring.")
+    st.caption(
+        "Rating Blockers are the only fields in this section that stop formulas. "
+        "Source readiness missing rows are evidence/support gaps unless they also appear here as Rating Blockers."
+    )
 
     st.markdown("**Priority Review Queue**")
-    st.caption(f"Validation Support rows needing evidence review: {support_to_check}. Optional / Contextual rows are kept visible but non-blocking.")
-    tabs = st.tabs(["Blocking Required", "Validation Support", "Optional / Contextual", "Verified"])
-    verified_df = completeness[completeness["current_status"].astype(str).eq("Verified")].copy()
+    st.caption(
+        f"Rating-input support rows awaiting validation: {support_to_check}. "
+        "Optional / Contextual rows are visible for transparency but are not part of the current rating path."
+    )
+    tabs = st.tabs(["1. Blocking Required", "2. Rating Inputs", "3. Optional / Contextual", "4. Verified"])
     for tab, label, frame in [
         (tabs[0], "Blocking Required", blocking),
         (tabs[1], "Validation Support", support),
@@ -2362,6 +2391,11 @@ def _render_data_completeness_review(methodology_id: str) -> pd.DataFrame:
                     if active_context
                     else pd.DataFrame()
                 )
+                if label == "Validation Support":
+                    st.caption(
+                        "These fields already have a system value or support a direct metric. "
+                        "Use the panels only when you want to verify, replace, or document that value."
+                    )
                 _render_field_review_panels(action_frame, label)
     return completeness
 
@@ -2408,6 +2442,11 @@ def _render_step_4_candidates(methodology_id: str) -> None:
         st.warning(f"{missing_count} blocking required fields are still missing. Evidence validation below only covers fields that already have a system value.")
     validation_counts = evidence["validation_status"].value_counts().to_dict()
     ready_for_decision = evidence[evidence["validation_status"].astype(str).isin({"Verified", "Supported", "Needs Review"})].copy()
+    st.markdown("**Evidence Workbench**")
+    st.caption(
+        "This is not the source extraction table. It starts from the value currently feeding the rating path, "
+        "then lets you add independent ACFR/API/OS evidence next to it."
+    )
     cols = st.columns(4)
     cols[0].metric("Evidence Queue", len(evidence))
     cols[1].metric("Awaiting Evidence", int(validation_counts.get("Awaiting Evidence", 0)) + int(validation_counts.get("Unverified", 0)))
@@ -2507,7 +2546,18 @@ def _render_ai_evidence_assist(methodology_id: str) -> None:
     context_cols[0].metric("System Value", selected_row.get("system_value", ""))
     context_cols[1].metric("Evidence Status", selected_row.get("validation_status", ""))
     context_cols[2].metric("Evidence Role", selected_row.get("evidence_role", ""))
-    st.caption(f"Suggested section: {selected_row.get('suggested_document_section', '') or selected_row.get('evidence_target', '')}")
+    target = selected_row.get("suggested_document_section", "") or selected_row.get("evidence_target", "")
+    with st.container(border=True):
+        st.markdown("**AI extraction packet**")
+        packet_cols = st.columns(2)
+        packet_cols[0].markdown(f"**Field**  \n{selected_row.get('field_name', '')}")
+        packet_cols[1].markdown(f"**Factor**  \n{selected_row.get('factor', '')}")
+        packet_cols[0].markdown(f"**System source**  \n{selected_row.get('system_source', '') or 'Not available'}")
+        packet_cols[1].markdown(f"**Suggested evidence section**  \n{target or 'Not configured'}")
+        st.caption(
+            "Paste only the located ACFR/API/OS/workbook excerpt for this field. "
+            "The model is instructed to return JSON and to avoid inventing values."
+        )
     evidence_text = st.text_area(
         "Paste located ACFR / OS / API / workbook text",
         value=st.session_state.get("ai_evidence_text", ""),
@@ -2819,6 +2869,7 @@ def _render_step_6_publish(methodology_id: str, approvals: pd.DataFrame) -> None
 def data_confirmation_export() -> pd.DataFrame:
     """Flat process export for docs, reports, or future page downloads."""
     sections = [
+        ("operating_lanes", DATA_CONFIRMATION_LANES),
         ("human_workflow", HUMAN_WORKFLOW_STEPS),
         ("requirement_class_rules", REQUIREMENT_CLASS_RULES),
         ("file_registry_template", SP_LOCAL_GOV_FILE_REGISTRY),
@@ -2832,12 +2883,69 @@ def data_confirmation_export() -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _render_operating_lanes(methodology_id: str) -> None:
+    metrics = rating_readiness_metrics(methodology_id)
+    completeness = _completeness_frame(methodology_id)
+    evidence = _evidence_validation_frame(methodology_id)
+
+    blocking_missing = int(metrics.get("blocking_missing", 0) or 0)
+    manual_missing = int(metrics.get("manual_score_missing", 0) or 0)
+    evidence_awaiting = int(metrics.get("evidence_awaiting", 0) or 0)
+    evidence_variance = int(metrics.get("evidence_variance", 0) or 0)
+    evidence_verified = int(metrics.get("evidence_verified", 0) or 0)
+
+    if not isinstance(completeness, pd.DataFrame) or completeness.empty:
+        rating_inputs = 0
+    else:
+        rating_inputs = int(
+            completeness["requirement_class"].astype(str).isin(["Blocking Required", "Validation Support"]).sum()
+        )
+    approval_rows = st.session_state.get("data_confirmation_approvals")
+    approval_count = len(approval_rows) if isinstance(approval_rows, pd.DataFrame) else 0
+
+    st.markdown("**How this page is organized**")
+    st.caption(
+        "Use the left-to-right operating lanes below. Source readiness can show missing support rows; "
+        "only Rating Path blockers stop the score."
+    )
+    cols = st.columns(3)
+    lane_metrics = [
+        (
+            "A. Rating Path",
+            f"{blocking_missing} blocking missing / {manual_missing} manual missing",
+            metrics.get("next_action", ""),
+        ),
+        (
+            "B. Evidence Path",
+            f"{evidence_verified} verified / {evidence_awaiting} awaiting / {evidence_variance} variance",
+            f"{rating_inputs} rating inputs are in scope for evidence checks.",
+        ),
+        (
+            "C. Publish Path",
+            f"{approval_count} approval rows",
+            "Only approved values and review notes flow into exports.",
+        ),
+    ]
+    for col, (title, metric, note) in zip(cols, lane_metrics):
+        with col:
+            st.metric(title, metric)
+            st.caption(note)
+
+    if isinstance(evidence, pd.DataFrame) and not evidence.empty:
+        source_counts = evidence["evidence_role"].fillna("").astype(str).value_counts().to_dict()
+        st.caption(
+            "Evidence queue mix: "
+            + ", ".join(f"{role or 'Unlabeled'}={count}" for role, count in source_counts.items())
+        )
+
+
 def _render_human_workflow_cards() -> None:
     methodology_id = st.session_state.get("methodology_id", "moodys_ccd_go")
     registry = pd.DataFrame()
     approvals = pd.DataFrame()
 
     render_rating_readiness_overview(methodology_id, expanded=False)
+    _render_operating_lanes(methodology_id)
 
     with st.expander("1. Data Collection", expanded=True):
         _render_step_1_context()
@@ -2868,9 +2976,12 @@ def render_data_confirmation_workflow(methodology_id: str) -> None:
     notice = st.session_state.pop("data_confirmation_save_notice", None)
     if notice:
         st.success(notice)
-    st.caption("Operational validation workflow: resolve Blocking Required fields first, validate support fields against ACFR/API/workbook evidence, then run formulas from confirmed values.")
+    st.caption(
+        "Operational validation workflow: first resolve true rating blockers, then verify rating-driving values "
+        "with ACFR/API/workbook evidence, then approve only the values that should flow into outputs."
+    )
 
-    tabs = st.tabs(["Operational workflow", "File registry", "Field checklist", "Status definitions"])
+    tabs = st.tabs(["Decision Queue", "File Registry", "Field Checklist", "Status Definitions"])
     with tabs[0]:
         _render_human_workflow_cards()
         with st.expander("View workflow as table", expanded=False):
