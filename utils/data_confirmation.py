@@ -13,52 +13,40 @@ from utils.ui_helpers import clean_for_display, selected_source_report
 
 HUMAN_WORKFLOW_STEPS: List[Dict[str, str]] = [
     {
-        "step": "1. Lock deal context",
-        "human_action": "Confirm issuer, methodology, and fiscal year.",
-        "system_action": "Use one context across source QA, formulas, rating, and exports.",
-        "decision_output": "Context locked",
+        "step": "1. Data Collection",
+        "human_action": "Upload workbook, ACFRs, debt support, and fetch API candidates.",
+        "system_action": "Register files and source candidates without making rating judgments.",
+        "decision_output": "Source inventory",
     },
     {
-        "step": "2. Register files",
-        "human_action": "Upload CreditScope workbook, ACFRs, and debt support documents.",
-        "system_action": "Classify issuer, document type, fiscal year, and include/exclude status.",
-        "decision_output": "File registry",
+        "step": "2. Data Completeness Review",
+        "human_action": "Resolve required fields marked Missing before evidence validation.",
+        "system_action": "Classify required fields as Complete, Needs Review, Missing, or Manual Override.",
+        "decision_output": "Completeness status",
     },
     {
-        "step": "3. Locate evidence",
-        "human_action": "Review source-map pages and missing/source-pending fields before formulas run.",
-        "system_action": "Locate ACFR, debt support, API, and workbook evidence against required raw fields.",
-        "decision_output": "Evidence map",
+        "step": "3. Metric Calculation",
+        "human_action": "Run formulas only after required fields have acceptable coverage.",
+        "system_action": "Calculate metrics from approved system values.",
+        "decision_output": "System values",
     },
     {
-        "step": "4. ACFR evidence check",
-        "human_action": "Enter ACFR value, page, and line item only for fields ACFR can support.",
-        "system_action": "Show the system value beside the ACFR evidence without treating blank evidence as a data failure.",
-        "decision_output": "ACFR evidence",
+        "step": "4. Evidence Validation",
+        "human_action": "Validate existing system values against ACFR, OS, API, or other support.",
+        "system_action": "Evaluate only fields that already have a system value.",
+        "decision_output": "Evidence status",
     },
     {
-        "step": "5. Reconcile values",
-        "human_action": "Confirm system value, use ACFR value, or flag a mismatch for review.",
-        "system_action": "Compute variance only when both system and ACFR values are present.",
-        "decision_output": "Reconciliation decision",
+        "step": "5. Reconciliation & Approval",
+        "human_action": "Accept system value, replace with evidence value, or send to review.",
+        "system_action": "Store analyst decision and approved value for downstream use.",
+        "decision_output": "Approved value",
     },
     {
-        "step": "6. AI review",
-        "human_action": "Use AI only on cited pages or selected evidence snippets.",
-        "system_action": "Explain line-item fit, likely mismatch reason, and confidence.",
-        "decision_output": "Reviewer note",
-    },
-    {
-        "step": "7. Approve value",
-        "human_action": "Accept CreditScope, accept ACFR, override manually, or mark needs review.",
-        "system_action": "Store selected value, selected source, approval note, and audit timestamp.",
-        "decision_output": "Approved source",
-    },
-    {
-        "step": "8. Publish outputs",
-        "human_action": "Save issuer_data, then run formulas, rating audit trail, report, and presentation exports.",
-        "system_action": "Carry approved source labels into issuer_data, rating/report/slides.",
-        "decision_output": "Source-backed output",
+        "step": "6. Publish Outputs",
+        "human_action": "Run rating, report, and presentation exports with trust metrics attached.",
+        "system_action": "Carry completeness, evidence coverage, and approval labels into outputs.",
+        "decision_output": "Auditable rating",
     },
 ]
 
@@ -171,44 +159,39 @@ SP_LOCAL_GOV_FIELD_CHECKLIST: List[Dict[str, str]] = [
 
 APPROVAL_STATUS_RULES: List[Dict[str, str]] = [
     {
-        "status": "matched",
-        "meaning": "Independent source supports the current source value within rounding tolerance.",
-        "next_action": "Approve current source value.",
+        "status": "Verified",
+        "meaning": "System value matches supporting evidence within tolerance.",
+        "next_action": "Accept system value.",
     },
     {
-        "status": "minor_difference",
-        "meaning": "Difference appears attributable to rounding, fiscal-year presentation, or table formatting.",
-        "next_action": "Approve with note if rating bucket is unchanged.",
+        "status": "Supported",
+        "meaning": "Evidence supports the value, but minor rounding or presentation differences exist.",
+        "next_action": "Accept with review note when rating impact is immaterial.",
     },
     {
-        "status": "material_difference",
-        "meaning": "Difference could change a metric score, factor score, or final rating.",
-        "next_action": "Do not publish until reviewed.",
+        "status": "Needs Review",
+        "meaning": "Material difference exists or line-item fit is uncertain.",
+        "next_action": "Send to analyst review before publishing.",
     },
     {
-        "status": "missing_source",
-        "meaning": "Required independent support has not been located.",
-        "next_action": "Keep CreditScope as unverified or request another source.",
+        "status": "Unverified",
+        "meaning": "No supporting evidence has been located for the system value.",
+        "next_action": "Locate support or keep the value explicitly unverified.",
     },
     {
-        "status": "source_pending",
-        "meaning": "Current source layer has no usable value yet, but an independent candidate can be entered.",
-        "next_action": "Use ACFR/API/debt support before falling back to manual input.",
+        "status": "Strong",
+        "meaning": "Evidence comes from primary audited/source documentation such as ACFR notes or statements.",
+        "next_action": "Use as high-confidence support.",
     },
     {
-        "status": "awaiting_independent_check",
-        "meaning": "Current source layer has a value, but no ACFR/API/debt-support confirmation has been entered yet.",
-        "next_action": "Enter an independent value and citation only for fields that need confirmation.",
+        "status": "Medium",
+        "meaning": "Evidence comes from credible but secondary support such as an OS appendix.",
+        "next_action": "Use with citation and scope note.",
     },
     {
-        "status": "missing_current_value",
-        "meaning": "Neither the current source layer nor the independent confirmation table has a usable value.",
-        "next_action": "Find the raw field in ACFR/API/debt support or add a manual fallback.",
-    },
-    {
-        "status": "issuer_mismatch",
-        "meaning": "Document issuer, pledge, or credit does not match the current deal.",
-        "next_action": "Exclude from source QA.",
+        "status": "Weak",
+        "meaning": "Evidence is narrative, AI-assisted, manual, or otherwise not directly tied to an official table.",
+        "next_action": "Use only when stronger evidence is unavailable.",
     },
 ]
 
@@ -421,12 +404,21 @@ FIELD_EVIDENCE_HINTS: Dict[str, str] = {
 }
 
 APPROVAL_DECISIONS = [
-    "Needs review",
-    "Confirm system value",
-    "Use ACFR value",
-    "Manual override",
-    "Not applicable",
+    "Accept System Value",
+    "Replace With Evidence Value",
+    "Send To Review",
 ]
+
+COMPLETENESS_STATUS_ORDER = {
+    "Missing": 0,
+    "Needs Review": 1,
+    "Manual Override": 2,
+    "Complete": 3,
+}
+
+VALIDATION_STATUS_OPTIONS = ["Verified", "Supported", "Needs Review", "Unverified"]
+EVIDENCE_STRENGTH_OPTIONS = ["Strong", "Medium", "Weak"]
+RECONCILIATION_ACTIONS = ["Accept System Value", "Replace With Evidence Value", "Send To Review"]
 
 
 def _frame(rows: Iterable[Dict[str, Any]]) -> pd.DataFrame:
@@ -789,32 +781,6 @@ def _direct_metric_debug_lookup() -> dict[str, dict[str, Any]]:
     }
 
 
-def _comparison_status(field: str, selected_value: Any, independent_value: Any) -> tuple[str, Any, Any]:
-    selected_has_value = _has_value(selected_value)
-    independent_has_value = _has_value(independent_value)
-    if not independent_has_value:
-        if selected_has_value:
-            return "awaiting_acfr_evidence", "", ""
-        return "missing_system_and_acfr_value", "", ""
-    if not selected_has_value:
-        return "acfr_candidate_available", "", ""
-
-    selected = _parse_float(selected_value)
-    independent = _parse_float(independent_value)
-    if selected is None or independent is None:
-        return "non_numeric_check_required", "", ""
-    diff = independent - selected
-    abs_diff = abs(diff)
-    tolerance = FIELD_TOLERANCES.get(field, max(abs(selected) * 0.01, 0.01))
-    if abs_diff <= tolerance:
-        status = "matched"
-    elif abs_diff <= max(tolerance * 3, abs(selected) * 0.02):
-        status = "minor_difference"
-    else:
-        status = "material_difference"
-    return status, diff, abs_diff
-
-
 def _confirmation_checks(methodology_id: str) -> pd.DataFrame:
     saved = st.session_state.get("data_confirmation_checks")
     base = pd.DataFrame(_base_check_rows(methodology_id))
@@ -822,101 +788,234 @@ def _confirmation_checks(methodology_id: str) -> pd.DataFrame:
         saved = saved.copy()
         if "field_name" not in saved.columns and "field_or_metric" in saved.columns:
             saved["field_name"] = saved["field_or_metric"]
-        editable_cols = ["field_name", "independent_value", "independent_source", "citation", "review_note"]
+        rename_map = {
+            "evidence_value": "independent_value",
+            "evidence_line_item": "independent_source",
+            "evidence_page": "citation",
+            "review_notes": "review_note",
+        }
+        for new_col, old_col in rename_map.items():
+            if new_col in saved.columns and old_col not in saved.columns:
+                saved[old_col] = saved[new_col]
+        editable_cols = [
+            "field_name",
+            "independent_value",
+            "independent_source",
+            "citation",
+            "review_note",
+            "evidence_source",
+            "evidence_strength",
+            "validation_status",
+        ]
         saved_editable = saved[[col for col in editable_cols if col in saved.columns]].copy()
-        base = base.drop(columns=[col for col in ["independent_value", "independent_source", "citation", "review_note"] if col in base.columns])
+        base = base.drop(
+            columns=[
+                col
+                for col in [
+                    "independent_value",
+                    "independent_source",
+                    "citation",
+                    "review_note",
+                    "evidence_source",
+                    "evidence_strength",
+                    "validation_status",
+                ]
+                if col in base.columns
+            ]
+        )
         base = base.merge(saved_editable, on="field_name", how="left")
-    for col in ["independent_value", "independent_source", "citation", "review_note"]:
+    for col in [
+        "independent_value",
+        "independent_source",
+        "citation",
+        "review_note",
+        "evidence_source",
+        "evidence_strength",
+        "validation_status",
+    ]:
         if col not in base.columns:
             base[col] = ""
         base[col] = base[col].fillna("")
     return base
 
 
-def _acfr_check_reason(row: pd.Series) -> str:
-    field = str(row.get("field_name", "") or "")
-    status = str(row.get("source_status", "") or "")
-    source = str(row.get("current_source", "") or "")
+def _completeness_status(row: pd.Series) -> str:
+    source_status = str(row.get("source_status", "") or "")
     if not _has_value(row.get("current_source_value")):
-        return "Missing system value; locate ACFR or support evidence before manual fallback."
-    if field in {"fixed_cost_burden_ratio", "net_direct_debt_per_capita", "npl_per_capita"}:
-        return "Direct metric; reconcile workbook value to ACFR/debt support where possible."
-    if field in {"gov_operating_margin_3yr_avg", "available_fund_balance_ratio_3yr_avg"}:
-        return "Calculated metric; verify ACFR raw components and three-year scope."
-    if status in {"manual_input", "source_pending", "needs_review"}:
-        return "Current source is manual/pending; ACFR evidence should be tried first."
-    if "CreditScope" in source:
-        return "Workbook-sourced value; tie to ACFR line item before approval."
-    return "ACFR-supported raw field; confirm page, line item, and units."
+        return "Missing"
+    if source_status == "manual_input":
+        return "Manual Override"
+    if source_status in {"candidate_available", "source_pending", "needs_review", "scorecard_implied", "missing"}:
+        return "Needs Review"
+    return "Complete"
 
 
-def _is_acfr_relevant(row: pd.Series) -> bool:
+def _expected_source(row: pd.Series) -> str:
+    for col in ["preferred_sources", "candidate_sources", "current_source"]:
+        value = str(row.get(col, "") or "").strip()
+        if value:
+            return value
+    return "Not configured"
+
+
+def _completeness_frame(methodology_id: str) -> pd.DataFrame:
+    checks = _confirmation_checks(methodology_id).copy()
+    if checks.empty:
+        return checks
+    checks["expected_source"] = checks.apply(_expected_source, axis=1)
+    checks["current_status"] = checks.apply(_completeness_status, axis=1)
+    checks["status_rank"] = checks["current_status"].map(COMPLETENESS_STATUS_ORDER).fillna(9)
+    return checks.sort_values(["status_rank", "factor", "field_name"]).reset_index(drop=True)
+
+
+def _difference_pct(system_value: Any, evidence_value: Any) -> float | None:
+    system = _parse_float(system_value)
+    evidence = _parse_float(evidence_value)
+    if system is None or evidence is None:
+        return None
+    if system == 0:
+        return 0.0 if evidence == 0 else None
+    return abs((evidence - system) / system) * 100
+
+
+def _validation_status(field: str, system_value: Any, evidence_value: Any, saved_status: Any = "") -> str:
+    saved = str(saved_status or "").strip()
+    if saved in VALIDATION_STATUS_OPTIONS and saved != "Unverified":
+        return saved
+    if not _has_value(evidence_value):
+        return "Unverified"
+    system = _parse_float(system_value)
+    evidence = _parse_float(evidence_value)
+    if system is None or evidence is None:
+        return "Needs Review"
+    abs_diff = abs(evidence - system)
+    tolerance = FIELD_TOLERANCES.get(field, max(abs(system) * 0.01, 0.01))
+    if abs_diff <= tolerance:
+        return "Verified"
+    if abs_diff <= max(tolerance * 3, abs(system) * 0.02):
+        return "Supported"
+    return "Needs Review"
+
+
+def _evidence_source_label(row: pd.Series) -> str:
+    explicit = str(row.get("evidence_source", "") or "").strip()
+    if explicit:
+        return explicit
+    source_text = " ".join(
+        str(row.get(col, "") or "")
+        for col in ["independent_source", "citation", "evidence_target", "preferred_sources"]
+    ).lower()
+    if "acfr" in source_text or "audit" in source_text:
+        return "ACFR"
+    if "os" in source_text or "official statement" in source_text or "debt" in source_text:
+        return "Official Statement"
+    if "bea" in source_text:
+        return "BEA"
+    if "census" in source_text or "acs" in source_text:
+        return "Census / ACS"
+    return ""
+
+
+def _evidence_strength(row: pd.Series) -> str:
+    explicit = str(row.get("evidence_strength", "") or "").strip()
+    if explicit in EVIDENCE_STRENGTH_OPTIONS:
+        return explicit
+    evidence_source = _evidence_source_label(row).lower()
+    line_item = str(row.get("independent_source", "") or "").lower()
+    if "acfr" in evidence_source or "note" in line_item or "statement" in line_item:
+        return "Strong"
+    if "official statement" in evidence_source or "appendix" in line_item:
+        return "Medium"
+    return "Weak"
+
+
+def _evidence_relevant(row: pd.Series) -> bool:
+    if not _has_value(row.get("current_source_value")):
+        return False
     field = str(row.get("field_name", "") or "")
     factor = str(row.get("factor", "") or "")
     preferred = str(row.get("preferred_sources", "") or "")
     evidence = str(row.get("evidence_target", "") or "")
-    if field in {
-        "fixed_cost_burden_ratio",
-        "net_direct_debt_per_capita",
-        "npl_per_capita",
-        "gov_operating_margin_3yr_avg",
-        "available_fund_balance_ratio_3yr_avg",
-    }:
+    source = str(row.get("current_source", "") or "")
+    if field in DIRECT_METRIC_FIELDS:
         return True
     if "ACFR" in preferred or "OS" in preferred:
         return True
     if "ACFR" in evidence or "debt support" in evidence.lower():
         return True
+    if "CreditScope" in source or "Manual" in source:
+        return True
     return factor in {"Financial Performance", "Reserves and Liquidity", "Debt & Liabilities", "Pension", "OPEB"}
 
 
-def _acfr_workbench_frame(methodology_id: str) -> pd.DataFrame:
+def _evidence_validation_frame(methodology_id: str) -> pd.DataFrame:
     checks = _confirmation_checks(methodology_id).copy()
     if checks.empty:
         return checks
-    checks["acfr_applicable"] = checks.apply(_is_acfr_relevant, axis=1)
-    checks = checks[checks["acfr_applicable"]].copy()
+    checks = checks[checks.apply(_evidence_relevant, axis=1)].copy()
     if checks.empty:
         return checks
-    checks["check_reason"] = checks.apply(_acfr_check_reason, axis=1)
-    checks["has_system_value"] = checks["current_source_value"].map(_has_value)
-    checks["has_acfr_value"] = checks["independent_value"].map(_has_value)
-    checks["check_priority"] = checks.apply(
-        lambda row: (
-            0
-            if not row["has_system_value"]
-            else 1
-            if str(row.get("source_status", "")) in {"manual_input", "source_pending", "needs_review", "missing"}
-            else 2
-            if str(row.get("data_stage", "")) == "direct_metric_candidate"
-            else 3
+    checks["field_name"] = checks["field_name"].astype(str)
+    checks["system_value"] = checks["current_source_value"]
+    checks["system_source"] = checks["current_source"]
+    checks["evidence_source"] = checks.apply(_evidence_source_label, axis=1)
+    checks["evidence_page"] = checks["citation"]
+    checks["evidence_line_item"] = checks["independent_source"]
+    checks["evidence_value"] = checks["independent_value"]
+    checks["difference_pct"] = checks.apply(
+        lambda row: _difference_pct(row.get("system_value"), row.get("evidence_value")),
+        axis=1,
+    )
+    checks["validation_status"] = checks.apply(
+        lambda row: _validation_status(
+            str(row.get("field_name", "")),
+            row.get("system_value"),
+            row.get("evidence_value"),
+            row.get("validation_status", ""),
         ),
         axis=1,
     )
-    return checks.sort_values(["check_priority", "factor", "field_name"]).reset_index(drop=True)
+    checks["evidence_strength"] = checks.apply(_evidence_strength, axis=1)
+    checks["review_notes"] = checks["review_note"]
+    status_rank = {"Needs Review": 0, "Unverified": 1, "Supported": 2, "Verified": 3}
+    checks["validation_rank"] = checks["validation_status"].map(status_rank).fillna(9)
+    return checks.sort_values(["validation_rank", "factor", "field_name"]).reset_index(drop=True)
 
 
-def _comparison_frame(methodology_id: str) -> pd.DataFrame:
-    checks = _acfr_workbench_frame(methodology_id).copy()
-    if checks.empty:
-        return checks
-    rows = []
-    for _, row in checks.iterrows():
-        status, diff, abs_diff = _comparison_status(
-            str(row.get("field_name", "")),
-            row.get("current_source_value"),
-            row.get("independent_value"),
-        )
-        item = row.to_dict()
-        item.update(
-            {
-                "difference": diff,
-                "absolute_difference": abs_diff,
-                "qa_status": status,
-            }
-        )
-        rows.append(item)
-    return pd.DataFrame(rows)
+def evidence_confidence_metrics(methodology_id: str | None = None) -> dict[str, Any]:
+    methodology = methodology_id or st.session_state.get("methodology_id", "moodys_ccd_go")
+    completeness = _completeness_frame(methodology)
+    evidence = _evidence_validation_frame(methodology)
+    required_count = int(len(completeness)) if isinstance(completeness, pd.DataFrame) else 0
+    missing_count = (
+        int(completeness["current_status"].astype(str).eq("Missing").sum())
+        if isinstance(completeness, pd.DataFrame) and not completeness.empty and "current_status" in completeness.columns
+        else 0
+    )
+    data_completeness = ((required_count - missing_count) / required_count * 100) if required_count else 0.0
+    evidence_count = int(len(evidence)) if isinstance(evidence, pd.DataFrame) else 0
+    supported_statuses = {"Verified", "Supported", "Needs Review"}
+    evidence_supported = (
+        int(evidence["validation_status"].astype(str).isin(supported_statuses).sum())
+        if isinstance(evidence, pd.DataFrame) and not evidence.empty and "validation_status" in evidence.columns
+        else 0
+    )
+    verified_count = (
+        int(evidence["validation_status"].astype(str).isin({"Verified", "Supported"}).sum())
+        if isinstance(evidence, pd.DataFrame) and not evidence.empty and "validation_status" in evidence.columns
+        else 0
+    )
+    evidence_coverage = (evidence_supported / required_count * 100) if required_count else 0.0
+    return {
+        "required_fields": required_count,
+        "missing_fields": missing_count,
+        "data_completeness_pct": data_completeness,
+        "evidence_required_fields": evidence_count,
+        "evidence_supported_fields": evidence_supported,
+        "evidence_coverage_pct": evidence_coverage,
+        "verified_fields": verified_count,
+        "verified_denominator": required_count,
+    }
 
 
 def _save_confirmation_checks(edited: pd.DataFrame) -> None:
@@ -944,121 +1043,132 @@ def _render_step_3_source_map(registry: pd.DataFrame) -> None:
     st.dataframe(clean_for_display(source_map), width="stretch", hide_index=True)
 
 
-def _render_step_4_candidates(methodology_id: str) -> None:
-    checks = _acfr_workbench_frame(methodology_id)
-    if checks.empty:
-        st.info("No ACFR-supported fields are currently available for this methodology/context.")
-        return
-    status_counts = checks["source_status"].fillna("unknown").astype(str).value_counts().to_dict() if "source_status" in checks.columns else {}
-    has_current_value = checks["current_source_value"].map(_has_value) if "current_source_value" in checks.columns else pd.Series(dtype=bool)
-    has_independent_value = checks["independent_value"].map(_has_value) if "independent_value" in checks.columns else pd.Series(dtype=bool)
+def _render_data_completeness_review(methodology_id: str) -> pd.DataFrame:
+    completeness = _completeness_frame(methodology_id)
+    if completeness.empty:
+        st.info("No required-field list is available for this methodology yet.")
+        return completeness
+
+    counts = completeness["current_status"].value_counts().to_dict()
     cols = st.columns(4)
-    cols[0].metric("ACFR checks", len(checks))
-    cols[1].metric("System values", int(has_current_value.sum()))
-    cols[2].metric("Need value", int((~has_current_value).sum()) if len(has_current_value) else 0)
-    cols[3].metric("Evidence filled", int(has_independent_value.sum()))
-    st.caption("ACFR is used here as evidence. Confirm page, line item, units, and whether the ACFR value supports the system value.")
+    cols[0].metric("Required Fields", len(completeness))
+    cols[1].metric("Auto Filled", int(counts.get("Complete", 0)))
+    cols[2].metric("Needs Review", int(counts.get("Needs Review", 0)))
+    cols[3].metric("Missing", int(counts.get("Missing", 0)))
+
+    display_cols = [
+        "field_name",
+        "factor",
+        "expected_source",
+        "current_status",
+        "current_source_value",
+        "current_source",
+        "formula_dependency",
+    ]
+    st.dataframe(
+        clean_for_display(completeness[[col for col in display_cols if col in completeness.columns]]).rename(
+            columns={
+                "field_name": "Field",
+                "factor": "Factor",
+                "expected_source": "Expected Source",
+                "current_status": "Current Status",
+                "current_source_value": "Current Value",
+                "current_source": "Current Source",
+                "formula_dependency": "Used By",
+            }
+        ),
+        width="stretch",
+        hide_index=True,
+    )
+    return completeness
+
+
+def _render_metric_calculation_checkpoint() -> None:
+    formula_results = st.session_state.get("methodology_formula_results")
+    if not isinstance(formula_results, pd.DataFrame) or formula_results.empty:
+        formula_results = st.session_state.get("formula_results", pd.DataFrame())
+    if not isinstance(formula_results, pd.DataFrame) or formula_results.empty:
+        st.info("No formula results yet. Complete source fields, then run formulas in the main Workflow page.")
+        return
+    counts = formula_results["status"].fillna("unknown").astype(str).value_counts().to_dict() if "status" in formula_results.columns else {}
+    cols = st.columns(4)
+    cols[0].metric("Formula Rows", len(formula_results))
+    cols[1].metric("Ready", int(counts.get("ready", 0)))
+    cols[2].metric("Manual", int(counts.get("manual", 0)))
+    cols[3].metric("Missing/Error", int(counts.get("missing", 0)) + int(counts.get("error", 0)))
+    show_cols = ["formula_id", "formula_name", "category", "status", "value", "missing_fields"]
+    st.dataframe(
+        clean_for_display(formula_results[[col for col in show_cols if col in formula_results.columns]]),
+        width="stretch",
+        hide_index=True,
+    )
+
+
+def _render_step_4_candidates(methodology_id: str) -> None:
+    evidence = _evidence_validation_frame(methodology_id)
+    if evidence.empty:
+        st.info("No system values are ready for evidence validation yet. Resolve missing fields first.")
+        return
+    completeness = _completeness_frame(methodology_id)
+    missing_count = (
+        int(completeness["current_status"].astype(str).eq("Missing").sum())
+        if isinstance(completeness, pd.DataFrame) and not completeness.empty and "current_status" in completeness.columns
+        else 0
+    )
+    if missing_count:
+        st.warning(f"{missing_count} required fields are still missing. Evidence validation below only covers fields that already have a system value.")
+    counts = evidence["validation_status"].value_counts().to_dict()
+    cols = st.columns(4)
+    cols[0].metric("Evidence Fields", len(evidence))
+    cols[1].metric("Verified", int(counts.get("Verified", 0)))
+    cols[2].metric("Supported", int(counts.get("Supported", 0)))
+    cols[3].metric("Unverified", int(counts.get("Unverified", 0)))
+    st.caption("Evidence Validation only evaluates fields that already have a system value. Missing values belong in Data Completeness Review.")
     editable_cols = [
         "factor",
         "field_name",
-        "check_reason",
-        "current_source_value",
-        "current_source",
-        "source_status",
-        "evidence_target",
-        "independent_value",
-        "independent_source",
-        "citation",
-        "review_note",
+        "system_value",
+        "system_source",
+        "evidence_source",
+        "evidence_page",
+        "evidence_line_item",
+        "evidence_value",
+        "difference_pct",
+        "validation_status",
+        "evidence_strength",
+        "review_notes",
     ]
     with st.form("data_confirmation_candidate_form"):
         edited = st.data_editor(
-            clean_for_display(checks[[col for col in editable_cols if col in checks.columns]]),
+            clean_for_display(evidence[[col for col in editable_cols if col in evidence.columns]]),
             width="stretch",
             hide_index=True,
             num_rows="fixed",
             key="data_confirmation_candidate_editor",
             column_config={
-                "factor": st.column_config.TextColumn("factor", disabled=True),
-                "field_name": st.column_config.TextColumn("field_name", disabled=True),
-                "check_reason": st.column_config.TextColumn("why_check", disabled=True),
-                "current_source_value": st.column_config.TextColumn("system_value", disabled=True),
-                "current_source": st.column_config.TextColumn("system_source", disabled=True),
-                "source_status": st.column_config.TextColumn("system_status", disabled=True),
-                "evidence_target": st.column_config.TextColumn("where_to_check", disabled=True),
-                "independent_value": st.column_config.TextColumn("acfr_value"),
-                "independent_source": st.column_config.TextColumn("acfr_line_item"),
-                "citation": st.column_config.TextColumn("acfr_page_or_citation"),
-                "review_note": st.column_config.TextColumn("review_note"),
+                "factor": st.column_config.TextColumn("Factor", disabled=True),
+                "field_name": st.column_config.TextColumn("Field", disabled=True),
+                "system_value": st.column_config.TextColumn("System Value", disabled=True),
+                "system_source": st.column_config.TextColumn("System Source", disabled=True),
+                "evidence_source": st.column_config.TextColumn("Evidence Source"),
+                "evidence_page": st.column_config.TextColumn("Evidence Page"),
+                "evidence_line_item": st.column_config.TextColumn("Evidence Line Item"),
+                "evidence_value": st.column_config.TextColumn("Evidence Value"),
+                "difference_pct": st.column_config.NumberColumn("Difference %", disabled=True, format="%.2f"),
+                "validation_status": st.column_config.SelectboxColumn(
+                    "Validation Status",
+                    options=VALIDATION_STATUS_OPTIONS,
+                ),
+                "evidence_strength": st.column_config.SelectboxColumn(
+                    "Evidence Strength",
+                    options=EVIDENCE_STRENGTH_OPTIONS,
+                ),
+                "review_notes": st.column_config.TextColumn("Review Notes"),
             },
         )
-        if st.form_submit_button("Save ACFR evidence checks", type="primary"):
+        if st.form_submit_button("Save evidence validation", type="primary"):
             _save_confirmation_checks(edited)
-            st.success("ACFR evidence checks saved.")
-
-
-def _render_step_5_comparison(methodology_id: str) -> pd.DataFrame:
-    comparison = _comparison_frame(methodology_id)
-    if comparison.empty:
-        st.info("No comparison rows available yet.")
-        return comparison
-    cols = st.columns(4)
-    counts = comparison["qa_status"].value_counts().to_dict()
-    cols[0].metric("Matched", int(counts.get("matched", 0)))
-    cols[1].metric("Differences", int(counts.get("minor_difference", 0)) + int(counts.get("material_difference", 0)))
-    cols[2].metric("Awaiting ACFR", int(counts.get("awaiting_acfr_evidence", 0)))
-    cols[3].metric("Needs value", int(counts.get("missing_system_and_acfr_value", 0)) + int(counts.get("acfr_candidate_available", 0)))
-    show_cols = [
-        "factor",
-        "field_name",
-        "current_source_value",
-        "independent_value",
-        "difference",
-        "absolute_difference",
-        "qa_status",
-        "source_status",
-        "citation",
-    ]
-    display = comparison[[col for col in show_cols if col in comparison.columns]].rename(
-        columns={
-            "current_source_value": "system_value",
-            "independent_value": "acfr_value",
-            "source_status": "system_status",
-            "citation": "acfr_page_or_citation",
-        }
-    )
-    st.dataframe(clean_for_display(display), width="stretch", hide_index=True)
-    st.session_state["data_confirmation_comparison"] = comparison
-    return comparison
-
-
-def _review_prompt(row: pd.Series) -> str:
-    return (
-        "Review this pre-formula source QA item using only the cited page/table evidence.\n\n"
-        f"Field: {row.get('field_name', '')}\n"
-        f"Factor: {row.get('factor', '')}\n"
-        f"Data stage: {row.get('data_stage', '')}\n"
-        f"System value: {row.get('current_source_value', '')}\n"
-        f"System source: {row.get('current_source', '')}\n"
-        f"Source status: {row.get('source_status', '')}\n"
-        f"Formula dependency: {row.get('formula_dependency', '')}\n"
-        f"ACFR value: {row.get('independent_value', '')}\n"
-        f"ACFR line item: {row.get('independent_source', '')}\n"
-        f"ACFR page/citation: {row.get('citation', '')}\n"
-        f"Current QA status: {row.get('qa_status', '')}\n\n"
-        "Confirm whether the ACFR line item supports this raw field or direct metric candidate, "
-        "explain any mismatch before formula calculation, and assign confidence as high / medium / low."
-    )
-
-
-def _render_step_6_ai_review(comparison: pd.DataFrame) -> None:
-    if not isinstance(comparison, pd.DataFrame) or comparison.empty:
-        st.info("Run comparison first, then generate a bounded AI review prompt.")
-        return
-    options = comparison["field_name"].dropna().astype(str).tolist()
-    selected = st.selectbox("Select field for bounded AI review prompt", options, key="data_confirmation_review_field")
-    row = comparison[comparison["field_name"].astype(str).eq(selected)].iloc[0]
-    st.text_area("Review prompt", value=_review_prompt(row), height=230)
+            st.success("Evidence validation saved.")
 
 
 def _source_name_from_text(value: Any, fallback: str = "ACFR") -> str:
@@ -1087,32 +1197,43 @@ def _approval_candidates(approvals: pd.DataFrame) -> pd.DataFrame:
     for _, row in approvals.iterrows():
         decision = str(row.get("approval_decision", "") or "").strip()
         field = str(row.get("field_name", "") or "").strip()
-        if not field or decision == "Needs review" or decision == "Exclude source":
+        if not field or decision == "Send To Review":
             continue
         approved_value = row.get("approved_value")
         if approved_value is None or str(approved_value).strip() == "":
-            if decision == "Use ACFR value":
-                approved_value = row.get("independent_value")
-            elif decision == "Confirm system value":
-                approved_value = row.get("current_source_value")
+            if decision == "Replace With Evidence Value":
+                approved_value = row.get("evidence_value", row.get("independent_value"))
+            elif decision == "Accept System Value":
+                approved_value = row.get("system_value", row.get("current_source_value"))
         if approved_value is None or str(approved_value).strip() == "":
             continue
-        independent_source = str(row.get("independent_source", "") or "").strip()
-        source_name = (
-            _source_name_from_text(str(row.get("current_source", "")), fallback="CreditScope")
-            if decision == "Confirm system value"
-            else _source_name_from_text(independent_source, fallback="Manual" if decision == "Manual override" else "ACFR")
-        )
+        system_source = str(row.get("system_source", row.get("current_source", "")) or "").strip()
+        evidence_source = str(row.get("evidence_source", "") or "").strip()
+        evidence_line_item = str(row.get("evidence_line_item", row.get("independent_source", "")) or "").strip()
+        evidence_page = str(row.get("evidence_page", row.get("citation", "")) or "").strip()
+        if decision == "Accept System Value":
+            source_name = _source_name_from_text(system_source, fallback="CreditScope")
+            source_file = system_source
+            source_detail = "system_value_approval"
+            source_cell_or_api = ""
+            confidence = 0.90 if str(row.get("validation_status", "")) in {"Verified", "Supported"} else 0.75
+        else:
+            source_name = _source_name_from_text(f"{evidence_source} {evidence_line_item}", fallback="ACFR")
+            source_file = evidence_source or evidence_line_item
+            source_detail = "evidence_value_approval"
+            source_cell_or_api = evidence_page
+            strength = str(row.get("evidence_strength", "") or "")
+            confidence = 0.92 if strength == "Strong" else 0.82 if strength == "Medium" else 0.68
         rows.append(
             {
                 "field_name": field,
                 "value": approved_value,
                 "source_name": source_name,
                 "source_type": "Document" if source_name not in {"Manual", "BEA", "CensusACS", "CreditScope"} else "",
-                "source_detail": "acfr_confirmation" if decision == "Use ACFR value" else "data_confirmation_approval",
-                "confidence": 0.92 if decision == "Use ACFR value" else 0.80,
-                "source_file": independent_source,
-                "source_cell_or_api": row.get("citation", ""),
+                "source_detail": source_detail,
+                "confidence": confidence,
+                "source_file": source_file,
+                "source_cell_or_api": source_cell_or_api,
                 "source_label": decision,
                 "candidate_status": "ready",
                 "notes": str(row.get("approval_note") or row.get("review_note") or "").strip(),
@@ -1121,12 +1242,13 @@ def _approval_candidates(approvals: pd.DataFrame) -> pd.DataFrame:
     return normalize_source_candidates(pd.DataFrame(rows)) if rows else pd.DataFrame()
 
 
-def _render_step_7_approval(comparison: pd.DataFrame) -> pd.DataFrame:
-    if not isinstance(comparison, pd.DataFrame) or comparison.empty:
-        st.info("No comparison rows to approve yet.")
+def _render_step_5_reconciliation(methodology_id: str) -> pd.DataFrame:
+    evidence = _evidence_validation_frame(methodology_id)
+    if not isinstance(evidence, pd.DataFrame) or evidence.empty:
+        st.info("No evidence validation rows to approve yet.")
         return pd.DataFrame()
     saved = st.session_state.get("data_confirmation_approvals")
-    approvals = comparison.copy()
+    approvals = evidence.copy()
     if isinstance(saved, pd.DataFrame) and not saved.empty:
         saved = saved.copy()
         if "field_name" not in saved.columns and "field_or_metric" in saved.columns:
@@ -1137,7 +1259,27 @@ def _render_step_7_approval(comparison: pd.DataFrame) -> pd.DataFrame:
         if col not in approvals.columns:
             approvals[col] = ""
         approvals[col] = approvals[col].fillna("")
-    approvals["approval_decision"] = approvals["approval_decision"].replace("", "Needs review")
+    approvals["approval_decision"] = approvals.apply(
+        lambda row: str(row.get("approval_decision") or "").strip()
+        or ("Accept System Value" if str(row.get("validation_status", "")) in {"Verified", "Supported"} else "Send To Review"),
+        axis=1,
+    )
+    approvals["approved_value"] = approvals.apply(
+        lambda row: row.get("approved_value")
+        if str(row.get("approved_value", "") or "").strip()
+        else row.get("system_value")
+        if row.get("approval_decision") == "Accept System Value"
+        else row.get("evidence_value")
+        if row.get("approval_decision") == "Replace With Evidence Value"
+        else "",
+        axis=1,
+    )
+
+    decisions = approvals["approval_decision"].value_counts().to_dict()
+    cols = st.columns(3)
+    cols[0].metric("Accept System", int(decisions.get("Accept System Value", 0)))
+    cols[1].metric("Replace With Evidence", int(decisions.get("Replace With Evidence Value", 0)))
+    cols[2].metric("Send To Review", int(decisions.get("Send To Review", 0)))
 
     with st.form("data_confirmation_approval_form"):
         edited = st.data_editor(
@@ -1146,9 +1288,11 @@ def _render_step_7_approval(comparison: pd.DataFrame) -> pd.DataFrame:
                     [
                         "factor",
                         "field_name",
-                        "current_source_value",
-                        "independent_value",
-                        "qa_status",
+                        "system_value",
+                        "evidence_value",
+                        "difference_pct",
+                        "validation_status",
+                        "evidence_strength",
                         "approval_decision",
                         "approved_value",
                         "approval_note",
@@ -1160,52 +1304,61 @@ def _render_step_7_approval(comparison: pd.DataFrame) -> pd.DataFrame:
             num_rows="fixed",
             key="data_confirmation_approval_editor",
             column_config={
-                "factor": st.column_config.TextColumn("factor", disabled=True),
-                "field_name": st.column_config.TextColumn("field_name", disabled=True),
-                "current_source_value": st.column_config.TextColumn("system_value", disabled=True),
-                "independent_value": st.column_config.TextColumn("acfr_value", disabled=True),
-                "qa_status": st.column_config.TextColumn("qa_status", disabled=True),
-                "approval_decision": st.column_config.SelectboxColumn(
-                    "approval_decision",
-                    options=APPROVAL_DECISIONS,
-                ),
-                "approved_value": st.column_config.TextColumn("approved_value"),
-                "approval_note": st.column_config.TextColumn("approval_note"),
+                "factor": st.column_config.TextColumn("Factor", disabled=True),
+                "field_name": st.column_config.TextColumn("Field", disabled=True),
+                "system_value": st.column_config.TextColumn("System Value", disabled=True),
+                "evidence_value": st.column_config.TextColumn("Evidence Value", disabled=True),
+                "difference_pct": st.column_config.NumberColumn("Difference %", disabled=True, format="%.2f"),
+                "validation_status": st.column_config.TextColumn("Status", disabled=True),
+                "evidence_strength": st.column_config.TextColumn("Evidence Strength", disabled=True),
+                "approval_decision": st.column_config.SelectboxColumn("Action", options=RECONCILIATION_ACTIONS),
+                "approved_value": st.column_config.TextColumn("Approved Value"),
+                "approval_note": st.column_config.TextColumn("Approval Note"),
             },
         )
-        if st.form_submit_button("Save approvals", type="primary"):
+        if st.form_submit_button("Save reconciliation decisions", type="primary"):
             st.session_state["data_confirmation_approvals"] = edited.copy()
             approved_candidates = _approval_candidates(edited)
             st.session_state["approved_source_candidates"] = approved_candidates
-            st.success("Approvals saved.")
+            st.success("Reconciliation decisions saved.")
             if not approved_candidates.empty:
-                st.caption("Approved ACFR/system values will be included as source candidates on the next Save issuer_data run.")
+                st.caption("Approved values will be included as source candidates on the next Save issuer_data run.")
             return edited.copy()
     return approvals
 
 
-def _render_step_8_publish(comparison: pd.DataFrame, approvals: pd.DataFrame) -> None:
+def _render_step_6_publish(methodology_id: str, approvals: pd.DataFrame) -> None:
+    metrics = evidence_confidence_metrics(methodology_id)
+    cols = st.columns(3)
+    cols[0].metric("Data Completeness", f"{metrics['data_completeness_pct']:.0f}%")
+    cols[1].metric("Evidence Coverage", f"{metrics['evidence_coverage_pct']:.0f}%")
+    cols[2].metric("Verified Fields", f"{metrics['verified_fields']} / {metrics['verified_denominator']}")
+
     approved = approvals if isinstance(approvals, pd.DataFrame) and not approvals.empty else st.session_state.get("data_confirmation_approvals")
     if not isinstance(approved, pd.DataFrame) or approved.empty:
-        st.info("No approvals saved yet.")
+        st.info("No reconciliation decisions saved yet.")
     else:
         decisions = approved["approval_decision"].value_counts().to_dict() if "approval_decision" in approved.columns else {}
         cols = st.columns(3)
-        cols[0].metric("Approved rows", len(approved[approved.get("approval_decision", "").astype(str).ne("Needs review")]) if "approval_decision" in approved.columns else 0)
-        cols[1].metric("Needs review", int(decisions.get("Needs review", 0)))
-        cols[2].metric("Material differences", int((comparison.get("qa_status", pd.Series(dtype=str)).astype(str) == "material_difference").sum()) if isinstance(comparison, pd.DataFrame) and not comparison.empty else 0)
+        cols[0].metric("Accepted System", int(decisions.get("Accept System Value", 0)))
+        cols[1].metric("Evidence Replacements", int(decisions.get("Replace With Evidence Value", 0)))
+        cols[2].metric("Review Queue", int(decisions.get("Send To Review", 0)))
 
     export_frames = []
-    if isinstance(comparison, pd.DataFrame) and not comparison.empty:
-        export_frames.append(comparison.assign(export_section="comparison"))
+    completeness = _completeness_frame(methodology_id)
+    evidence = _evidence_validation_frame(methodology_id)
+    if isinstance(completeness, pd.DataFrame) and not completeness.empty:
+        export_frames.append(completeness.assign(export_section="data_completeness"))
+    if isinstance(evidence, pd.DataFrame) and not evidence.empty:
+        export_frames.append(evidence.assign(export_section="evidence_validation"))
     if isinstance(approved, pd.DataFrame) and not approved.empty:
-        export_frames.append(approved.assign(export_section="approvals"))
+        export_frames.append(approved.assign(export_section="reconciliation_approval"))
     export_df = pd.concat(export_frames, ignore_index=True, sort=False) if export_frames else pd.DataFrame()
     if not export_df.empty:
         st.download_button(
-            "Download source_qa_workpaper.csv",
+            "Download evidence_reconciliation_workpaper.csv",
             data=export_df.to_csv(index=False).encode("utf-8"),
-            file_name="source_qa_workpaper.csv",
+            file_name="evidence_reconciliation_workpaper.csv",
             mime="text/csv",
         )
 
@@ -1228,38 +1381,34 @@ def data_confirmation_export() -> pd.DataFrame:
 def _render_human_workflow_cards() -> None:
     methodology_id = st.session_state.get("methodology_id", "moodys_ccd_go")
     registry = pd.DataFrame()
-    comparison = pd.DataFrame()
     approvals = pd.DataFrame()
 
-    with st.expander("1. Lock deal context", expanded=True):
+    with st.expander("1. Data Collection", expanded=True):
         _render_step_1_context()
-
-    with st.expander("2. Register files", expanded=True):
         registry = _render_step_2_file_registry()
+        with st.expander("Evidence locator map", expanded=False):
+            _render_step_3_source_map(registry)
 
-    with st.expander("3. Locate evidence for missing fields", expanded=True):
-        _render_step_3_source_map(registry)
+    with st.expander("2. Data Completeness Review", expanded=True):
+        _render_data_completeness_review(methodology_id)
 
-    with st.expander("4. ACFR evidence check", expanded=True):
+    with st.expander("3. Metric Calculation", expanded=True):
+        _render_metric_calculation_checkpoint()
+
+    with st.expander("4. Evidence Validation", expanded=True):
         _render_step_4_candidates(methodology_id)
 
-    with st.expander("5. Reconcile ACFR vs system value", expanded=True):
-        comparison = _render_step_5_comparison(methodology_id)
+    with st.expander("5. Reconciliation & Approval", expanded=True):
+        approvals = _render_step_5_reconciliation(methodology_id)
 
-    with st.expander("6. AI review", expanded=False):
-        _render_step_6_ai_review(comparison)
-
-    with st.expander("7. Approve value", expanded=False):
-        approvals = _render_step_7_approval(comparison)
-
-    with st.expander("8. Publish outputs", expanded=False):
-        _render_step_8_publish(comparison, approvals)
+    with st.expander("6. Publish Outputs", expanded=False):
+        _render_step_6_publish(methodology_id, approvals)
 
 
 def render_data_confirmation_workflow(methodology_id: str) -> None:
-    st.caption("Source QA happens before formulas: confirm raw fields, direct metric candidates, missing values, and manual fallbacks before saving issuer_data.")
+    st.caption("Evidence & Reconciliation separates missing-data cleanup from documentary validation, then carries approved trust labels into rating outputs.")
 
-    tabs = st.tabs(["Source QA workflow", "File registry", "Required fields", "Approval rules"])
+    tabs = st.tabs(["Verification workflow", "File registry", "Field checklist", "Status definitions"])
     with tabs[0]:
         _render_human_workflow_cards()
         with st.expander("View workflow as table", expanded=False):
@@ -1288,9 +1437,9 @@ def render_data_confirmation_workflow(methodology_id: str) -> None:
                     {
                         "factor": "All",
                         "field_or_metric": "Methodology fields",
-                        "primary_check": "Use source_report gaps and pre-formula source candidates to identify fields needing independent support.",
+                        "primary_check": "Use Data Completeness Review to resolve missing values before documentary validation.",
                         "preferred_evidence": "Issuer-specific source document, API record, or approved manual input.",
-                        "approval_note": "Build a methodology-specific checklist before production use.",
+                        "approval_note": "Evidence Validation should only test fields that already have system values.",
                     }
                 ]
             )

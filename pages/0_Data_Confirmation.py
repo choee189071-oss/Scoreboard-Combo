@@ -18,12 +18,12 @@ init_state()
 
 page_header(
     "Data Confirmation",
-    "A pre-formula source QA workspace for missing fields, ACFR evidence, independent value checks, AI review prompts, and human approval.",
+    "Evidence and reconciliation workspace for data completeness, documentary support, analyst approval, and final rating confidence.",
     "data_confirmation",
 )
 current_context_card()
 
-st.info("Use this before formulas: upload files and fetch API candidates in Workflow, resolve missing/source-pending fields here, then save issuer_data and run scoring.")
+st.info("Use this as the trust layer: resolve missing required fields first, calculate metrics, then validate existing system values against ACFR or other support before approving outputs.")
 st.page_link("streamlit_app.py", label="Open Workflow")
 
 render_data_confirmation_workflow(st.session_state.get("methodology_id", "moodys_ccd_go"))
