@@ -885,6 +885,18 @@ def run_rating_engine(
         # If adjustments were already applied inside branch, recompute their record for transparency.
         _, applied_adjustments = apply_rating_adjustments(anchor, modifiers=modifiers, caps=caps) if anchor else ("", [])
 
+    coverage_status = _coverage_status_from_summary(coverage_summary)
+    if coverage_status != "ready":
+        if rating:
+            warnings.append(
+                "Indicative rating withheld because formula coverage is not ready. "
+                "Use the score/profile outputs as a partial preview only."
+            )
+        rating = ""
+        anchor = ""
+        sacp = ""
+        icr = ""
+
     if not rating:
         warnings.append("Indicative rating could not be produced because required scores are missing.")
 
@@ -907,7 +919,7 @@ def run_rating_engine(
         financial_score=financial_score,
         icp_score=icp_score,
         institutional_framework_score=if_score,
-        coverage_status=_coverage_status_from_summary(coverage_summary),
+        coverage_status=coverage_status,
         warnings=warnings,
         applied_adjustments=applied_adjustments,
     )

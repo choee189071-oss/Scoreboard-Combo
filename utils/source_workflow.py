@@ -45,7 +45,7 @@ SOURCE_SESSION_KEYS = {
     "workbook_direct_metric_debug",
 }
 
-SOURCE_WORKFLOW_CACHE_VERSION = "direct-metrics-cache-v3"
+SOURCE_WORKFLOW_CACHE_VERSION = "creditscope-main-sheet-v1"
 
 
 SOURCE_WORKFLOW_GUIDE: list[dict[str, str]] = [
@@ -123,6 +123,7 @@ def _cached_creditscope_mapping(
     payload: bytes,
     sheet_name: str | None,
     required_fields: tuple[str, ...],
+    include_support_tabs: bool,
     cache_version: str,
 ) -> Dict[str, Any]:
     return load_creditscope_source_candidates(
@@ -132,6 +133,7 @@ def _cached_creditscope_mapping(
         sheet_name=sheet_name,
         value_col=2,
         required_fields=list(required_fields),
+        include_support_tabs=include_support_tabs,
     )
 
 
@@ -684,6 +686,17 @@ def render_source_workflow(methodology_id: str) -> None:
                         accept_multiple_files=bool(option.get("multiple", False)),
                     )
                     st.caption(option["caption"])
+                    include_support_tabs = False
+                    if source_name == "CreditScope":
+                        include_support_tabs = st.checkbox(
+                            "Include workbook support tabs as advanced supplemental source",
+                            value=False,
+                            key=f"include_support_tabs_{key}",
+                            help=(
+                                "Default off: only the auto-selected CreditScope/raw worksheet feeds issuer_data. "
+                                "Turn on only when deliberately using scorecard/support tabs as a supplemental source."
+                            ),
+                        )
                     uploaded_files = uploaded if isinstance(uploaded, list) else ([uploaded] if uploaded is not None else [])
                     if not uploaded_files:
                         continue
@@ -719,6 +732,7 @@ def render_source_workflow(methodology_id: str) -> None:
                                     payload,
                                     selected_sheet,
                                     tuple(required_names),
+                                    include_support_tabs,
                                     SOURCE_WORKFLOW_CACHE_VERSION,
                                 )
                                 report = loader_output["match_report"]

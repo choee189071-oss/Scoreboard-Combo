@@ -325,6 +325,7 @@ def load_creditscope_source_candidates(
     value_col: int = 2,
     required_fields: Optional[Iterable[str]] = None,
     fuzzy_threshold: float = 0.92,
+    include_support_tabs: bool = False,
 ) -> dict[str, Any]:
     """
     Load a CreditScope CSV/XLSX file as standardized source candidates.
@@ -354,14 +355,15 @@ def load_creditscope_source_candidates(
                 mapping_path=mapping_path,
                 fuzzy_threshold=0.82,
             )
-        _seek_start(uploaded_file)
-        supplemental_report = _load_sp_local_gov_supplemental_report(uploaded_file)
-        if not supplemental_report.empty:
-            for _, supplemental_row in supplemental_report.iterrows():
-                value = supplemental_row.get("value")
-                if value is not None:
-                    issuer_data[str(supplemental_row["field_name"])] = value
-            match_report = pd.concat([supplemental_report, match_report], ignore_index=True)
+        if include_support_tabs:
+            _seek_start(uploaded_file)
+            supplemental_report = _load_sp_local_gov_supplemental_report(uploaded_file)
+            if not supplemental_report.empty:
+                for _, supplemental_row in supplemental_report.iterrows():
+                    value = supplemental_row.get("value")
+                    if value is not None:
+                        issuer_data[str(supplemental_row["field_name"])] = value
+                match_report = pd.concat([supplemental_report, match_report], ignore_index=True)
     else:
         _seek_start(uploaded_file)
         issuer_data, match_report = map_uploaded_file(
