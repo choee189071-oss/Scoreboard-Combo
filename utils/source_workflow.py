@@ -51,6 +51,8 @@ SOURCE_SESSION_KEYS = {
 }
 
 SOURCE_WORKFLOW_CACHE_VERSION = "creditscope-single-sheet-v2"
+LATEST_CENSUS_SOURCE_YEAR = 2024
+LATEST_BEA_SOURCE_YEAR = 2024
 
 
 SOURCE_WORKFLOW_GUIDE: list[dict[str, str]] = [
@@ -438,28 +440,6 @@ def _clear_formula_rating_outputs() -> None:
     st.session_state["rating_output"] = None
 
 
-def _manual_fields(required_fields: pd.DataFrame, source_report: pd.DataFrame | None) -> pd.DataFrame:
-    manual_df = required_fields.copy()
-    if isinstance(source_report, pd.DataFrame) and not source_report.empty and "field_name" in source_report.columns:
-        selected = selected_source_report(source_report)
-        reported_fields = set(selected["field_name"].dropna().astype(str))
-        required_names = set(manual_df["field_name"].dropna().astype(str))
-        gap_fields = required_names - reported_fields
-        if "readiness_status" in selected.columns:
-            gap_fields.update(
-                selected[
-                    selected["readiness_status"].astype(str).isin(["missing", "source_pending", "needs_review"])
-                ]["field_name"]
-                .dropna()
-                .astype(str)
-            )
-        if gap_fields:
-            manual_df = manual_df[manual_df["field_name"].astype(str).isin(gap_fields)].copy()
-    manual_values = st.session_state.get("manual_source_values", {}) or {}
-    manual_df["value"] = manual_df["field_name"].map(lambda field: "" if field not in manual_values else str(manual_values[field]))
-    return manual_df[["field_name", "value", "used_by", "category"]]
-
-
 def _complete_required_field_frame(required_fields: pd.DataFrame, required_names: Iterable[str]) -> pd.DataFrame:
     existing = set(required_fields["field_name"].dropna().astype(str)) if not required_fields.empty else set()
     missing = sorted({str(field) for field in required_names if str(field)} - existing)
@@ -476,20 +456,213 @@ def _complete_required_field_frame(required_fields: pd.DataFrame, required_names
     )
 
 
-def _clean_manual_values(df: pd.DataFrame) -> Dict[str, Any]:
-    out: Dict[str, Any] = {}
-    if not isinstance(df, pd.DataFrame) or df.empty:
-        return out
-    for _, row in df.iterrows():
+def _parse_year(value: Any, fallback: int) -> int:
+    match = re.search(r"\d{4}", str(value or ""))
+    if not match:
+        return fallback
+    try:
+        return int(match.group(0))
+    except Exception:
+        return fallback
+
+
+def _bounded_year(value: Any, *, minimum: int, maximum: int, fallback: int) -> int:
+    parsed = _parse_year(value, fallback)
+    return max(minimum, min(maximum, parsed))
+
+
+def _source_year_defaults() -> tuple[str, int, int, int]:
+    analysis_year = str(st.session_state.get("analysis_year", "") or "").strip()
+    parsed_analysis_year = _parse_year(analysis_year, LATEST_CENSUS_SOURCE_YEAR)
+    census_year = _bounded_year(
+        parsed_analysis_year,
+        minimum=2009,
+        maximum=LATEST_CENSUS_SOURCE_YEAR,
+        fallback=LATEST_CENSUS_SOURCE_YEAR,
+    )
+    bea_year = _bounded_year(
+        parsed_analysis_year,
+        minimum=2001,
+        maximum=LATEST_BEA_SOURCE_YEAR,
+        fallback=LATEST_BEA_SOURCE_YEAR,
+    )
+    bea_prior = max(2000, min(bea_year - 1, LATEST_BEA_SOURCE_YEAR - 1))
+    return analysis_year or str(parsed_analysis_year), census_year, bea_year, bea_prior
+
+
+def _source_candidate_frames(include_manual_values: bool) -> list[pd.DataFrame]:
+    frames: list[pd.DataFrame] = []
+    frames.extend(
+        frame
+        for frame in st.session_state.get("uploaded_source_candidates", {}).values()
+        if isinstance(frame, pd.DataFrame) and not frame.empty
+    )
+    frames.extend(
+        frame
+        for frame in st.session_state.get("api_source_candidates", {}).values()
+        if isinstance(frame, pd.DataFrame) and not frame.empty
+    )
+    approved_candidates = st.session_state.get("approved_source_candidates")
+    if isinstance(approved_candidates, pd.DataFrame) and not approved_candidates.empty:
+        frames.append(approved_candidates)
+    if include_manual_values:
+        manual_values = st.session_state.get("manual_source_values", {}) or {}
+        manual_candidates = manual_data_to_source_candidates(manual_values)
+        if not manual_candidates.empty:
+            frames.append(manual_candidates)
+        st.session_state["manual_source_candidates"] = manual_candidates
+    return frames
+
+
+def _clean_input_value(value: Any) -> Any:
+    if value is None or str(value).strip() == "":
+        return None
+    try:
+        return float(value)
+    except Exception:
+        return str(value).strip()
+
+
+def _values_match(left: Any, right: Any) -> bool:
+    left_clean = _clean_input_value(left)
+    right_clean = _clean_input_value(right)
+    if left_clean is None and right_clean is None:
+        return True
+    if left_clean is None or right_clean is None:
+        return False
+    try:
+        return abs(float(left_clean) - float(right_clean)) <= 1e-9
+    except Exception:
+        return str(left_clean).strip() == str(right_clean).strip()
+
+
+def _source_label_from_row(row: pd.Series) -> str:
+    parts = [
+        str(row.get("canonical_source") or row.get("source_name") or "").strip(),
+        str(row.get("source_file") or "").strip(),
+        str(row.get("source_cell_or_api") or row.get("source_table") or "").strip(),
+    ]
+    return ": ".join(part for part in parts if part)
+
+
+def _build_issuer_data_editor(
+    *,
+    methodology_id: str,
+    required_fields: pd.DataFrame,
+    required_names: list[str],
+    frames: list[pd.DataFrame],
+) -> tuple[pd.DataFrame, Dict[str, Any]]:
+    result = run_data_sourcing_pipeline(
+        frames,
+        methodology_id=methodology_id,
+        required_fields=required_names,
+    )
+    issuer_data = dict(result["issuer_data"])
+    source_report = result["source_report"]
+    selected = selected_source_report(source_report)
+    selected_lookup: dict[str, pd.Series] = {}
+    if isinstance(selected, pd.DataFrame) and not selected.empty and "field_name" in selected.columns:
+        for _, row in selected.iterrows():
+            field = str(row.get("field_name", "") or "").strip()
+            if field and field not in selected_lookup:
+                selected_lookup[field] = row
+
+    direct_metric_overrides = _workbook_direct_metric_overrides(methodology_id)
+    for field, item in direct_metric_overrides.items():
+        issuer_data[field] = item.get("workbook_value")
+
+    manual_values = st.session_state.get("manual_source_values", {}) or {}
+    source_value_map: dict[str, Any] = {}
+    rows: list[dict[str, Any]] = []
+    for _, row in required_fields.iterrows():
         field = str(row.get("field_name", "") or "").strip()
-        value = row.get("value")
-        if not field or value is None or str(value).strip() == "":
+        if not field:
             continue
-        try:
-            out[field] = float(value)
-        except Exception:
-            out[field] = str(value).strip()
-    return out
+        selected_row = selected_lookup.get(field)
+        status = "missing"
+        source_used = ""
+        value = issuer_data.get(field)
+        if field in direct_metric_overrides:
+            value = direct_metric_overrides[field].get("workbook_value")
+            status = "workbook_direct_metric"
+            source_used = str(direct_metric_overrides[field].get("source_used") or "CreditScope workbook").strip()
+        elif value is not None:
+            status = str(selected_row.get("readiness_status", "independent_ready") if selected_row is not None else "independent_ready")
+            source_used = _source_label_from_row(selected_row) if selected_row is not None else ""
+        elif field in manual_values and str(manual_values[field]).strip() != "":
+            value = manual_values[field]
+            status = "manual_input"
+            source_used = "Manual"
+        elif selected_row is not None:
+            status = str(selected_row.get("readiness_status", "") or "missing")
+            source_used = _source_label_from_row(selected_row)
+
+        source_value_map[field] = value
+        rows.append(
+            {
+                "field_name": field,
+                "value": "" if value is None else value,
+                "source_status": status,
+                "source_used": source_used,
+                "used_by": row.get("used_by", ""),
+                "category": row.get("category", ""),
+            }
+        )
+    editor_df = pd.DataFrame(rows, columns=["field_name", "value", "source_status", "source_used", "used_by", "category"])
+    return editor_df, {
+        "source_result": result,
+        "source_value_map": source_value_map,
+        "direct_metric_debug": _direct_metric_debug_frame(direct_metric_overrides, issuer_data),
+    }
+
+
+def _save_issuer_data_from_editor(
+    edited_inputs: pd.DataFrame,
+    *,
+    methodology_id: str,
+    source_context: Dict[str, Any],
+    run_formulas: bool,
+) -> None:
+    issuer_data: Dict[str, Any] = {}
+    manual_values: Dict[str, Any] = {}
+    source_value_map = source_context.get("source_value_map", {}) or {}
+    if isinstance(edited_inputs, pd.DataFrame) and not edited_inputs.empty:
+        for _, row in edited_inputs.iterrows():
+            field = str(row.get("field_name", "") or "").strip()
+            value = _clean_input_value(row.get("value"))
+            if not field or value is None:
+                continue
+            issuer_data[field] = value
+            if not _values_match(value, source_value_map.get(field)):
+                manual_values[field] = value
+
+    result = source_context.get("source_result", {}) or {}
+    st.session_state["issuer_data"] = issuer_data
+    st.session_state["manual_source_values"] = manual_values
+    st.session_state["source_report"] = result.get("source_report", pd.DataFrame())
+    st.session_state["source_candidates"] = result.get("source_candidates", pd.DataFrame())
+    st.session_state["source_readiness_summary"] = result.get("source_readiness_summary", pd.DataFrame())
+    st.session_state["workbook_direct_metric_debug"] = source_context.get("direct_metric_debug", pd.DataFrame())
+    st.session_state["issuer_data_input_table"] = edited_inputs.copy() if isinstance(edited_inputs, pd.DataFrame) else pd.DataFrame()
+    _clear_formula_rating_outputs()
+    st.session_state["source_saved_needs_formula_run"] = True
+    reports = []
+    reports.extend(st.session_state.get("uploaded_source_reports", {}).values())
+    reports.extend(st.session_state.get("api_source_reports", {}).values())
+    if reports:
+        st.session_state["source_match_reports"] = pd.concat(
+            [r for r in reports if isinstance(r, pd.DataFrame) and not r.empty],
+            ignore_index=True,
+        )
+    st.success(f"Saved issuer_data with {len(issuer_data)} calculation input fields.")
+    manual_count = len(manual_values)
+    if manual_count:
+        st.caption(f"{manual_count} value(s) were saved as manual replacements because they were blank or changed from the suggested source value.")
+    if run_formulas:
+        formula_results = _run_formulas_after_source_save(methodology_id, issuer_data)
+        st.success(f"Ran formulas from the saved issuer_data. {len(formula_results)} formula rows saved.")
+    else:
+        st.info("Formula and scoreboard outputs were cleared. Run formulas next when you are ready.")
 
 
 def _readiness_tabs(source_report: pd.DataFrame) -> None:
@@ -872,19 +1045,22 @@ def render_source_workflow(methodology_id: str) -> None:
                 st.caption("This shows what each upload could and could not map. It is not the final source readiness list.")
                 st.dataframe(clean_for_display(pd.concat(upload_reports, ignore_index=True)), width="stretch", hide_index=True)
 
-    api_container = st.expander("Optional: Census / BEA API candidates", expanded=not guided_mode)
+    api_container = st.expander("Step 2. API source candidates (optional)", expanded=True)
     with api_container:
         st.markdown("**API candidates**")
+        analysis_year_label, default_census_year, default_bea_year, default_bea_prior = _source_year_defaults()
         st.caption(
-            "Census and BEA fields are fetched as source candidates only. External releases lag analysis years, "
-            "so the default API year is the latest conservative published year used by this app."
+            f"Scorecard year stays {analysis_year_label}. Census/BEA source years are separate because external "
+            f"releases lag the rating year; this app defaults to ACS {default_census_year} and BEA "
+            f"{default_bea_year}/{default_bea_prior} where needed."
         )
         issuer_name = str(st.session_state.get("issuer_name", "") or "").lower()
         default_state_fips = str(st.session_state.get("state_fips", "") or "06").zfill(2)
-        default_county_fips = str(
-            st.session_state.get("county_fips", "")
-            or ("113" if "west sacramento" in issuer_name else "013")
-        ).zfill(3)
+        stored_county_fips = str(st.session_state.get("county_fips", "") or "").strip()
+        if "west sacramento" in issuer_name and stored_county_fips in {"", "013"}:
+            default_county_fips = "113"
+        else:
+            default_county_fips = str(stored_county_fips or "013").zfill(3)
         c1, c2 = st.columns(2)
         with c1:
             st.write("Census ACS")
@@ -892,9 +1068,27 @@ def render_source_workflow(methodology_id: str) -> None:
             if not census_key_available:
                 _show_missing_api_key("Census ACS", "CENSUS_API_KEY")
             census_cols = st.columns(3)
-            census_year = census_cols[0].number_input("ACS year", min_value=2009, max_value=2024, value=2024, step=1)
-            state_fips = census_cols[1].text_input("State FIPS", value=default_state_fips, max_chars=2)
-            county_fips = census_cols[2].text_input("County FIPS", value=default_county_fips, max_chars=3)
+            census_year = census_cols[0].number_input(
+                "ACS source year",
+                min_value=2009,
+                max_value=LATEST_CENSUS_SOURCE_YEAR,
+                value=default_census_year,
+                step=1,
+                key="api_census_source_year",
+                help="This is the Census data vintage, not the scorecard year.",
+            )
+            state_fips = census_cols[1].text_input(
+                "State FIPS",
+                value=default_state_fips,
+                max_chars=2,
+                key="api_state_fips",
+            )
+            county_fips = census_cols[2].text_input(
+                "County FIPS",
+                value=default_county_fips,
+                max_chars=3,
+                key="api_county_fips",
+            )
             st.session_state["state_fips"] = str(state_fips).zfill(2)
             st.session_state["county_fips"] = str(county_fips).zfill(3)
             include_proxy = st.checkbox("Include proxy fields", value=False)
@@ -920,10 +1114,34 @@ def render_source_workflow(methodology_id: str) -> None:
             if not bea_key_available:
                 _show_missing_api_key("BEA Regional", "BEA_API_KEY")
             bea_cols = st.columns(4)
-            bea_year = bea_cols[0].number_input("BEA year", min_value=2001, max_value=2024, value=2024, step=1)
-            bea_prior = bea_cols[1].number_input("BEA prior", min_value=2000, max_value=2023, value=2023, step=1)
-            bea_state = bea_cols[2].text_input("BEA State", value=state_fips or "06", max_chars=2)
-            bea_county = bea_cols[3].text_input("BEA County", value=county_fips or "013", max_chars=3)
+            bea_year = bea_cols[0].number_input(
+                "BEA source year",
+                min_value=2001,
+                max_value=LATEST_BEA_SOURCE_YEAR,
+                value=default_bea_year,
+                step=1,
+                key="api_bea_source_year",
+                help="This is the BEA data vintage, not the scorecard year.",
+            )
+            bea_prior = max(2000, int(bea_year) - 1)
+            bea_cols[1].text_input(
+                "BEA prior year",
+                value=str(bea_prior),
+                disabled=True,
+                help="Automatically set to the year before the BEA source year.",
+            )
+            bea_state = bea_cols[2].text_input(
+                "BEA State",
+                value=state_fips or "06",
+                max_chars=2,
+                key="api_bea_state_fips",
+            )
+            bea_county = bea_cols[3].text_input(
+                "BEA County",
+                value=county_fips or "013",
+                max_chars=3,
+                key="api_bea_county_fips",
+            )
             bea_fields = supported_bea_candidate_fields()
             st.caption(f"{len(bea_fields)} BEA fields selected automatically.")
             if st.button("Fetch BEA", key="api_fetch_bea", disabled=not bea_key_available):
@@ -974,101 +1192,53 @@ def render_source_workflow(methodology_id: str) -> None:
             if fetched:
                 st.success(f"Fetched {' and '.join(fetched)} candidate fields.")
 
-    manual_container = st.expander("Step 2. Save uploaded data and fill only truly missing values", expanded=True)
-    with manual_container:
-        st.markdown("**Save issuer_data**" if guided_mode else "**Manual / source-pending inputs**")
+    with st.container(border=True):
+        st.markdown("**Step 3. Save issuer_data**" if guided_mode else "**Save issuer_data**")
         st.caption(
-            "Usually you can leave the table blank. Click Save uploaded data as issuer_data after uploads."
-            if guided_mode
-            else "Only typed values are saved. Blank cells do not overwrite uploaded or API source data."
+            "This is the official calculation input table. Values found from uploads/API/approved sources are prefilled; "
+            "required fields that are not found stay blank. Type manual replacements directly in the value column."
         )
-        manual_base = _manual_fields(required_df, st.session_state.get("source_report"))
-        with st.form(f"manual_source_form_{methodology_id}"):
-            if manual_base.empty:
-                st.info("No manual/source-pending fields currently need input.")
-                edited_manual = manual_base
-            else:
-                edited_manual = st.data_editor(
-                    manual_base,
-                    width="stretch",
-                    hide_index=True,
-                    num_rows="fixed",
-                    key=f"manual_source_editor_{methodology_id}",
-                    column_config={
-                        "field_name": st.column_config.TextColumn("field_name", disabled=True),
-                        "value": st.column_config.TextColumn("value"),
-                        "used_by": st.column_config.TextColumn("used_by", disabled=True),
-                        "category": st.column_config.TextColumn("category", disabled=True),
-                    },
-                )
+        frames = _source_candidate_frames(include_manual_values=False)
+        issuer_data_editor, source_context = _build_issuer_data_editor(
+            methodology_id=methodology_id,
+            required_fields=required_df,
+            required_names=required_names,
+            frames=frames,
+        )
+        if frames:
+            st.caption(f"{len(frames)} source candidate group(s) are feeding the suggested values in this table.")
+        else:
+            st.info("No source candidates yet. The table is still available so required calculation inputs are visible.")
+        with st.form(f"issuer_data_input_form_{methodology_id}"):
+            edited_inputs = st.data_editor(
+                issuer_data_editor,
+                width="stretch",
+                hide_index=True,
+                num_rows="fixed",
+                key=f"issuer_data_input_editor_{methodology_id}",
+                column_config={
+                    "field_name": st.column_config.TextColumn("field_name", disabled=True),
+                    "value": st.column_config.TextColumn("value"),
+                    "source_status": st.column_config.TextColumn("source_status", disabled=True),
+                    "source_used": st.column_config.TextColumn("source_used", disabled=True),
+                    "used_by": st.column_config.TextColumn("used_by", disabled=True),
+                    "category": st.column_config.TextColumn("category", disabled=True),
+                },
+            )
             button_cols = st.columns(2)
-            save_sources = button_cols[0].form_submit_button(
-                "Save uploaded data as issuer_data" if guided_mode else "Save issuer_data",
+            save_inputs = button_cols[0].form_submit_button(
+                "Save issuer_data",
                 type="primary",
             )
-            save_and_run = button_cols[1].form_submit_button("Save issuer_data and run formulas")
+            save_inputs_and_run = button_cols[1].form_submit_button("Save issuer_data and run formulas")
 
-        if save_sources or save_and_run:
-            manual_values = dict(st.session_state.get("manual_source_values", {}) or {})
-            manual_values.update(_clean_manual_values(edited_manual))
-            st.session_state["manual_source_values"] = manual_values
-            frames: list[pd.DataFrame] = []
-            frames.extend(
-                frame
-                for frame in st.session_state.get("uploaded_source_candidates", {}).values()
-                if isinstance(frame, pd.DataFrame) and not frame.empty
+        if save_inputs or save_inputs_and_run:
+            _save_issuer_data_from_editor(
+                edited_inputs,
+                methodology_id=methodology_id,
+                source_context=source_context,
+                run_formulas=save_inputs_and_run,
             )
-            frames.extend(
-                frame
-                for frame in st.session_state.get("api_source_candidates", {}).values()
-                if isinstance(frame, pd.DataFrame) and not frame.empty
-            )
-            manual_candidates = manual_data_to_source_candidates(manual_values)
-            if not manual_candidates.empty:
-                frames.append(manual_candidates)
-                st.session_state["manual_source_candidates"] = manual_candidates
-            approved_candidates = st.session_state.get("approved_source_candidates")
-            if isinstance(approved_candidates, pd.DataFrame) and not approved_candidates.empty:
-                frames.append(approved_candidates)
-            if not frames:
-                st.warning("No source candidates are available yet.")
-            else:
-                result = run_data_sourcing_pipeline(
-                    frames,
-                    methodology_id=methodology_id,
-                    required_fields=required_names,
-                )
-                issuer_data = dict(result["issuer_data"])
-                direct_metric_overrides = _workbook_direct_metric_overrides(methodology_id)
-                for field, item in direct_metric_overrides.items():
-                    issuer_data[field] = item.get("workbook_value")
-                direct_metric_debug = _direct_metric_debug_frame(direct_metric_overrides, issuer_data)
-                st.session_state["issuer_data"] = issuer_data
-                st.session_state["source_report"] = result["source_report"]
-                st.session_state["source_candidates"] = result["source_candidates"]
-                st.session_state["source_readiness_summary"] = result["source_readiness_summary"]
-                st.session_state["workbook_direct_metric_debug"] = direct_metric_debug
-                _clear_formula_rating_outputs()
-                st.session_state["source_saved_needs_formula_run"] = True
-                reports = []
-                reports.extend(st.session_state.get("uploaded_source_reports", {}).values())
-                reports.extend(st.session_state.get("api_source_reports", {}).values())
-                if reports:
-                    st.session_state["source_match_reports"] = pd.concat(
-                        [r for r in reports if isinstance(r, pd.DataFrame) and not r.empty],
-                        ignore_index=True,
-                    )
-                st.success(f"Saved issuer_data with {len(issuer_data)} selected fields.")
-                if not direct_metric_debug.empty:
-                    st.caption(
-                        f"{len(direct_metric_debug)} workbook direct metric(s) applied to issuer_data. "
-                        "Full debug details are in Developer Tools > Advanced Diagnostics."
-                    )
-                if save_and_run:
-                    formula_results = _run_formulas_after_source_save(methodology_id, issuer_data)
-                    st.success(f"Ran formulas from the saved issuer_data. {len(formula_results)} formula rows saved.")
-                else:
-                    st.info("Formula and scoreboard outputs were cleared. Run formulas next, or use Save issuer_data and run formulas.")
 
     with st.expander("Support inventory readiness (advanced, not rating blockers)", expanded=False):
         _readiness_tabs(st.session_state.get("source_report", pd.DataFrame()))
