@@ -414,13 +414,21 @@ with st.container(border=True):
         formula_results = st.session_state.get("formula_results")
     formula_counts = status_counts(formula_results, "status")
     if formula_counts:
-        formula_action(formula_counts)
+        formula_action(formula_counts, formula_results)
         show_cols = ["formula_id", "formula_name", "category", "status", "value", "missing_fields", "error"]
         st.dataframe(
             clean_for_display(formula_results[[c for c in show_cols if c in formula_results.columns]]),
             width="stretch",
             hide_index=True,
         )
+        if isinstance(formula_results, pd.DataFrame) and "missing_fields" in formula_results.columns:
+            missing_text = ";".join(formula_results["missing_fields"].fillna("").astype(str).tolist())
+            if "issuer_population" in missing_text:
+                st.info(
+                    "Debt and pension per-capita formulas need `issuer_population`, not county population. "
+                    "For West Sacramento this should come from the CreditScope Population row or the issuer population in ACFR/OS. "
+                    "Re-save issuer_data after reuploading the CreditScope workbook, or type `issuer_population` in the value table."
+                )
         if "warning" in formula_results.columns:
             warning_rows = formula_results[formula_results["warning"].fillna("").astype(str).str.strip().ne("")]
             if not warning_rows.empty:

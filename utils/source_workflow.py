@@ -51,7 +51,7 @@ SOURCE_SESSION_KEYS = {
     "workbook_direct_metric_debug",
 }
 
-SOURCE_WORKFLOW_CACHE_VERSION = "creditscope-multiyear-v1"
+SOURCE_WORKFLOW_CACHE_VERSION = "issuer-population-required-v1"
 LATEST_CENSUS_SOURCE_YEAR = 2024
 LATEST_BEA_SOURCE_YEAR = 2024
 ISSUER_DATA_EDITOR_EXCLUDED_FIELDS = set(DIRECT_METRIC_SOURCE_FIELDS)
@@ -122,7 +122,8 @@ def _show_missing_api_key(source_label: str, secret_name: str) -> None:
 
 
 @st.cache_data(show_spinner=False)
-def _cached_required_names(methodology_id: str) -> tuple[str, ...]:
+def _cached_required_names(methodology_id: str, cache_version: str) -> tuple[str, ...]:
+    _ = cache_version
     return tuple(required_fields_for_methodology(methodology_id))
 
 
@@ -1052,7 +1053,7 @@ def render_source_workflow(methodology_id: str) -> None:
     st.session_state.setdefault("manual_source_values", {})
     st.session_state.setdefault("approved_source_candidates", pd.DataFrame())
 
-    required_names = list(_cached_required_names(methodology_id))
+    required_names = list(_cached_required_names(methodology_id, SOURCE_WORKFLOW_CACHE_VERSION))
     required_df = _complete_required_field_frame(_required_field_frame(methodology_id), required_names)
 
     notice = st.session_state.pop("source_reset_notice", None)

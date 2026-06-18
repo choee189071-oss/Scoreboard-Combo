@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 
+from engine.data_sourcing_engine import required_fields_for_methodology
 from utils.source_workflow import _auto_sheet, _clean_input_value, _values_match
 
 
@@ -16,6 +17,9 @@ class SourceWorkflowTests(unittest.TestCase):
         self.assertEqual(_clean_input_value("[1, 2.5, 3]"), [1.0, 2.5, 3.0])
         self.assertTrue(_values_match("[1, 2.5, 3]", [1.0, 2.5, 3.0]))
         self.assertEqual(_clean_input_value("(1,200)"), -1200.0)
+
+    def test_sp_local_gov_requires_issuer_population(self) -> None:
+        self.assertIn("issuer_population", required_fields_for_methodology("sp_local_gov_k12"))
 
 
 if __name__ == "__main__":

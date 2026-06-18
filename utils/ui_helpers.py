@@ -397,7 +397,21 @@ def readiness_action(source_report: pd.DataFrame | None) -> None:
         )
 
 
-def formula_action(summary: Mapping[str, Any]) -> None:
+def _unique_missing_formula_fields(formula_results: pd.DataFrame | None) -> list[str]:
+    if not isinstance(formula_results, pd.DataFrame) or formula_results.empty:
+        return []
+    if "missing_fields" not in formula_results.columns:
+        return []
+    fields: set[str] = set()
+    for value in formula_results["missing_fields"].dropna().tolist():
+        for part in str(value).replace("|", ";").replace(",", ";").split(";"):
+            field = part.strip()
+            if field and field.lower() not in {"manual", "none", "nan"}:
+                fields.add(field)
+    return sorted(fields)
+
+
+def formula_action(summary: Mapping[str, Any], formula_results: pd.DataFrame | None = None) -> None:
     missing = int(summary.get("missing", 0) or 0)
     errors = int(summary.get("error", 0) or 0)
     manual = int(summary.get("manual", 0) or 0)
@@ -409,9 +423,22 @@ def formula_action(summary: Mapping[str, Any]) -> None:
             "bad",
         )
     elif missing:
+        missing_fields = _unique_missing_formula_fields(formula_results)
+        if missing_fields:
+            field_count = len(missing_fields)
+            field_label = "raw input" if field_count == 1 else "raw inputs"
+            field_list = ", ".join(missing_fields[:4])
+            if len(missing_fields) > 4:
+                field_list += f", +{len(missing_fields) - 4} more"
+            body = (
+                f"{ready} formulas are ready. {field_count} {field_label} ({field_list}) "
+                f"currently blocks {missing} formula(s), and {manual} require analyst input."
+            )
+        else:
+            body = f"{ready} formulas are ready, {missing} are missing raw fields, and {manual} require analyst input."
         action_panel(
             "Some formulas cannot calculate yet",
-            f"{ready} formulas are ready, {missing} are missing raw fields, and {manual} require analyst input.",
+            body,
             "warn",
         )
     else:
