@@ -722,7 +722,13 @@ def _readiness_tabs(source_report: pd.DataFrame) -> None:
         st.info("No source report saved yet.")
         return
     selected = selected_source_report(source_report)
-    counts = source_readiness_counts(source_report)
+    if "field_name" in selected.columns:
+        direct_metric_mask = selected["field_name"].astype(str).isin(ISSUER_DATA_EDITOR_EXCLUDED_FIELDS)
+    else:
+        direct_metric_mask = pd.Series(False, index=selected.index)
+    raw_selected = selected[~direct_metric_mask].copy()
+    calculated_metrics = selected[direct_metric_mask].copy()
+    counts = source_readiness_counts(raw_selected)
     status_labels = {
         "missing": "support_missing (non-blocking unless also a formula blocker)",
         "independent_ready": "independent_ready",
@@ -731,30 +737,39 @@ def _readiness_tabs(source_report: pd.DataFrame) -> None:
     }
     st.caption(
         "Support inventory only: this is pre-formula extraction coverage. Support Missing rows are raw evidence gaps, "
-        "not rating blockers when a direct metric or formula-ready value already feeds scoring."
+        "not rating blockers when a formula-ready value already feeds scoring. Calculated/direct metrics are shown "
+        "separately because they are formula outputs or official support-tab checks, not manual source inputs."
     )
-    st.dataframe(
-        pd.DataFrame(
-            [
-                {
-                    "inventory_status": status_labels.get(key, key),
-                    "field_count": value,
-                }
-                for key, value in counts.items()
-            ]
-        ),
-        width="stretch",
-        hide_index=True,
-    )
-    missing = selected[selected["readiness_status"].astype(str).eq("missing")]
-    ready = selected[selected["readiness_status"].astype(str).eq("independent_ready")]
-    review = selected[selected["readiness_status"].astype(str).isin(["source_pending", "needs_review"])]
-    tabs = st.tabs(["Support Missing", "Inventory Ready", "Inventory Review", "All Selected"])
+    summary_rows = [
+        {
+            "inventory_status": status_labels.get(key, key),
+            "field_count": value,
+        }
+        for key, value in counts.items()
+    ]
+    if not calculated_metrics.empty:
+        calculated_count = (
+            calculated_metrics["field_name"].nunique()
+            if "field_name" in calculated_metrics.columns
+            else len(calculated_metrics)
+        )
+        summary_rows.append(
+            {
+                "inventory_status": "calculated_or_direct_metric",
+                "field_count": calculated_count,
+            }
+        )
+    st.dataframe(pd.DataFrame(summary_rows), width="stretch", hide_index=True)
+    missing = raw_selected[raw_selected["readiness_status"].astype(str).eq("missing")]
+    ready = raw_selected[raw_selected["readiness_status"].astype(str).eq("independent_ready")]
+    review = raw_selected[raw_selected["readiness_status"].astype(str).isin(["source_pending", "needs_review"])]
+    tabs = st.tabs(["Raw Missing", "Inventory Ready", "Inventory Review", "Calculated Metrics", "All Selected"])
     for idx, (tab, frame, empty) in enumerate([
-        (tabs[0], missing, "No missing support fields."),
+        (tabs[0], missing, "No missing raw support fields."),
         (tabs[1], ready, "No independently ready fields yet."),
         (tabs[2], review, "No source-pending or review fields."),
-        (tabs[3], selected, "No selected source rows."),
+        (tabs[3], calculated_metrics, "No calculated/direct metric rows."),
+        (tabs[4], selected, "No selected source rows."),
     ]):
         with tab:
             if frame.empty:
@@ -763,7 +778,12 @@ def _readiness_tabs(source_report: pd.DataFrame) -> None:
                 if idx == 0:
                     st.info(
                         "These fields were not separately extracted from the raw source inventory. "
-                        "They do not block scoring if an equivalent direct metric is already present in issuer_data."
+                        "They are the remaining source fields to confirm or fill before formula scoring is complete."
+                    )
+                elif idx == 3:
+                    st.info(
+                        "These rows are calculated later from raw inputs, or used only when validating an official "
+                        "support-tab direct metric. They are not manual issuer_data inputs."
                     )
                 st.dataframe(clean_for_display(frame), width="stretch", hide_index=True)
 
