@@ -9,15 +9,15 @@ import streamlit as st
 WORKFLOW_STEPS: List[Tuple[str, str, str]] = [
     ("workflow", "1", "Workflow"),
     ("data_confirmation", "2", "Review & Adjust"),
-    ("audit_platform", "3", "Audit"),
+    ("audit_platform", "3", "Audit & Advanced"),
 ]
 
 APP_NAME = "Scoreboard Combo"
-BUILD_LABEL = "workflow-led-v1"
+BUILD_LABEL = "main-nav-v2"
 PAGE_LINKS: Dict[str, Tuple[str, str]] = {
     "workflow": ("streamlit_app.py", "Workflow"),
     "data_confirmation": ("pages/0_Data_Confirmation.py", "Review & Adjust"),
-    "audit_platform": ("pages/2_Audit_Platform.py", "Audit"),
+    "audit_platform": ("pages/2_Audit_Platform.py", "Audit & Advanced"),
 }
 ADVANCED_PAGE_LINKS: Dict[str, Tuple[str, str]] = {
     "source_intake": ("pages/4_Source_Intake.py", "Source Intake Lab"),
@@ -203,12 +203,6 @@ def render_sidebar_navigation(active: str) -> None:
                 st.markdown(f'<div class="cs-sidebar-active">{label}</div>', unsafe_allow_html=True)
             else:
                 safe_page_link(path, label)
-        with st.expander("Advanced / QA", expanded=active in ADVANCED_PAGE_LINKS):
-            for key, (path, label) in ADVANCED_PAGE_LINKS.items():
-                if key == active:
-                    st.markdown(f'<div class="cs-sidebar-active">{label}</div>', unsafe_allow_html=True)
-                else:
-                    safe_page_link(path, label)
     st.sidebar.markdown(
         f'<div class="cs-sidebar-build">Build: {BUILD_LABEL}</div>',
         unsafe_allow_html=True,

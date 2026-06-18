@@ -14,7 +14,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from scripts.build_accuracy_matrix_workbook import build_workbook
 from scripts.methodology_accuracy_matrix import CASES, build_accuracy_package
-from utils.ui_helpers import clean_for_display, current_context_card, init_state, page_header
+from utils.ui_helpers import ADVANCED_PAGE_LINKS, clean_for_display, current_context_card, init_state, page_header
 
 
 DATA_DIR = PROJECT_ROOT / "work" / "methodology_accuracy_matrix"
@@ -117,14 +117,37 @@ def _missing_workbooks() -> list[Path]:
     return [case.workbook_path for case in CASES if not case.workbook_path.exists()]
 
 
-st.set_page_config(page_title="Audit", layout="wide")
+def _render_advanced_links() -> None:
+    with st.expander("Advanced tools", expanded=False):
+        st.caption(
+            "These are builder/debugging workspaces. Normal scoring runs should stay in Workflow and Review & Adjust."
+        )
+        cols = st.columns(len(ADVANCED_PAGE_LINKS))
+        for idx, (_, (path, label)) in enumerate(ADVANCED_PAGE_LINKS.items()):
+            with cols[idx]:
+                with st.container(border=True):
+                    st.markdown(f"**{label}**")
+                    if label == "Source Intake Lab":
+                        st.caption("Debug source_candidates, PDF extraction, and source selection.")
+                    elif label == "Data Platform":
+                        st.caption("Inspect field dictionaries, source priority, and gap reports.")
+                    else:
+                        st.caption("Inspect session state, formula diagnostics, and developer exports.")
+                    try:
+                        st.page_link(path, label=f"Open {label}")
+                    except Exception:
+                        st.caption(f"Open from sidebar/page list: {label}")
+
+
+st.set_page_config(page_title="Audit & Advanced", layout="wide")
 init_state()
 page_header(
-    "Audit",
-    "No-cheat benchmark audit for methodology accuracy, raw field coverage, and workbook page consistency.",
+    "Audit & Advanced",
+    "No-cheat benchmark audit first; builder/debugging tools are tucked into Advanced tools below.",
     "audit_platform",
 )
 current_context_card()
+_render_advanced_links()
 
 missing_workbooks = _missing_workbooks()
 if missing_workbooks:
