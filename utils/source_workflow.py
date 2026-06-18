@@ -212,7 +212,7 @@ def _reset_source_session(methodology_id: str) -> None:
     for key in SOURCE_SESSION_KEYS:
         st.session_state.pop(key, None)
     for key in list(st.session_state.keys()):
-        if str(key).startswith(("upload_", "sheet_", "manual_source_editor_", "api_fetch_")):
+        if str(key).startswith(("upload_", "sheet_", "manual_source_editor_", "api_")):
             st.session_state.pop(key, None)
     st.session_state["uploaded_sources"] = {}
     st.session_state["uploaded_pdf_documents"] = {}
@@ -488,6 +488,54 @@ def _source_year_defaults() -> tuple[str, int, int, int]:
     )
     bea_prior = max(2000, min(bea_year - 1, LATEST_BEA_SOURCE_YEAR - 1))
     return analysis_year or str(parsed_analysis_year), census_year, bea_year, bea_prior
+
+
+def _recommended_api_defaults() -> dict[str, Any]:
+    analysis_year_label, census_year, bea_year, bea_prior = _source_year_defaults()
+    issuer_name = str(st.session_state.get("issuer_name", "") or "").lower()
+    default_state_fips = str(st.session_state.get("state_fips", "") or "06").zfill(2)
+    stored_county_fips = str(st.session_state.get("county_fips", "") or "").strip()
+    is_west_sacramento = "west sacramento" in issuer_name
+    if is_west_sacramento and stored_county_fips in {"", "013"}:
+        default_county_fips = "113"
+    else:
+        default_county_fips = str(stored_county_fips or "013").zfill(3)
+    return {
+        "analysis_year_label": analysis_year_label,
+        "census_year": census_year,
+        "bea_year": bea_year,
+        "bea_prior": bea_prior,
+        "state_fips": default_state_fips,
+        "county_fips": default_county_fips,
+        "is_west_sacramento": is_west_sacramento,
+    }
+
+
+def _set_recommended_api_widget_defaults(defaults: dict[str, Any], *, force: bool = False) -> None:
+    simple_defaults = {
+        "api_census_source_year": defaults["census_year"],
+        "api_bea_source_year": defaults["bea_year"],
+        "api_state_fips": defaults["state_fips"],
+        "api_county_fips": defaults["county_fips"],
+    }
+    for key, value in simple_defaults.items():
+        if force or key not in st.session_state:
+            st.session_state[key] = value
+
+    if defaults.get("is_west_sacramento"):
+        for key in ["api_county_fips"]:
+            current = str(st.session_state.get(key, "") or "").zfill(3)
+            if force or current in {"", "013"}:
+                st.session_state[key] = "113"
+
+    current_bea_year = _bounded_year(
+        st.session_state.get("api_bea_source_year"),
+        minimum=2001,
+        maximum=LATEST_BEA_SOURCE_YEAR,
+        fallback=int(defaults["bea_year"]),
+    )
+    if force or current_bea_year == int(defaults["bea_prior"]):
+        st.session_state["api_bea_source_year"] = int(defaults["bea_year"])
 
 
 def _source_candidate_frames(include_manual_values: bool) -> list[pd.DataFrame]:
@@ -1047,50 +1095,53 @@ def render_source_workflow(methodology_id: str) -> None:
 
     api_container = st.expander("Step 2. API source candidates (optional)", expanded=True)
     with api_container:
-        st.markdown("**API candidates**")
-        analysis_year_label, default_census_year, default_bea_year, default_bea_prior = _source_year_defaults()
-        st.caption(
-            f"Scorecard year stays {analysis_year_label}. Census/BEA source years are separate because external "
-            f"releases lag the rating year; this app defaults to ACS {default_census_year} and BEA "
-            f"{default_bea_year}/{default_bea_prior} where needed."
+        defaults = _recommended_api_defaults()
+        _set_recommended_api_widget_defaults(defaults)
+        st.markdown("**API source candidates**")
+        st.caption("These values become source candidates only. They do not enter formulas until they appear in and are saved from the issuer_data table.")
+        status_cols = st.columns(4)
+        status_cols[0].metric("Scorecard Year", defaults["analysis_year_label"])
+        status_cols[1].metric("ACS Source Year", defaults["census_year"])
+        status_cols[2].metric("BEA Current", defaults["bea_year"])
+        status_cols[3].metric("BEA Prior", defaults["bea_prior"])
+        if st.button("Use recommended API defaults", key="api_use_recommended_defaults"):
+            _set_recommended_api_widget_defaults(defaults, force=True)
+            st.rerun()
+
+        geo_cols = st.columns([1, 1, 2])
+        state_fips = geo_cols[0].text_input(
+            "State FIPS",
+            max_chars=2,
+            key="api_state_fips",
+            help="Used by both Census ACS and BEA.",
         )
-        issuer_name = str(st.session_state.get("issuer_name", "") or "").lower()
-        default_state_fips = str(st.session_state.get("state_fips", "") or "06").zfill(2)
-        stored_county_fips = str(st.session_state.get("county_fips", "") or "").strip()
-        if "west sacramento" in issuer_name and stored_county_fips in {"", "013"}:
-            default_county_fips = "113"
+        county_fips = geo_cols[1].text_input(
+            "County FIPS",
+            max_chars=3,
+            key="api_county_fips",
+            help="Used by both Census ACS and BEA.",
+        )
+        if defaults.get("is_west_sacramento"):
+            geo_cols[2].info("West Sacramento should use California 06 and Yolo County 113.")
         else:
-            default_county_fips = str(stored_county_fips or "013").zfill(3)
+            geo_cols[2].caption("Confirm county FIPS before fetching API candidates.")
+        st.session_state["state_fips"] = str(state_fips).zfill(2)
+        st.session_state["county_fips"] = str(county_fips).zfill(3)
+
         c1, c2 = st.columns(2)
         with c1:
             st.write("Census ACS")
             census_key_available = bool(get_census_api_key())
             if not census_key_available:
                 _show_missing_api_key("Census ACS", "CENSUS_API_KEY")
-            census_cols = st.columns(3)
-            census_year = census_cols[0].number_input(
+            census_year = st.number_input(
                 "ACS source year",
                 min_value=2009,
                 max_value=LATEST_CENSUS_SOURCE_YEAR,
-                value=default_census_year,
                 step=1,
                 key="api_census_source_year",
                 help="This is the Census data vintage, not the scorecard year.",
             )
-            state_fips = census_cols[1].text_input(
-                "State FIPS",
-                value=default_state_fips,
-                max_chars=2,
-                key="api_state_fips",
-            )
-            county_fips = census_cols[2].text_input(
-                "County FIPS",
-                value=default_county_fips,
-                max_chars=3,
-                key="api_county_fips",
-            )
-            st.session_state["state_fips"] = str(state_fips).zfill(2)
-            st.session_state["county_fips"] = str(county_fips).zfill(3)
             include_proxy = st.checkbox("Include proxy fields", value=False)
             census_fields = supported_census_candidate_fields(include_proxy_fields=include_proxy)
             st.caption(f"{len(census_fields)} Census fields selected automatically.")
@@ -1113,12 +1164,11 @@ def render_source_workflow(methodology_id: str) -> None:
             bea_key_available = bool(get_bea_api_key())
             if not bea_key_available:
                 _show_missing_api_key("BEA Regional", "BEA_API_KEY")
-            bea_cols = st.columns(4)
+            bea_cols = st.columns(2)
             bea_year = bea_cols[0].number_input(
                 "BEA source year",
                 min_value=2001,
                 max_value=LATEST_BEA_SOURCE_YEAR,
-                value=default_bea_year,
                 step=1,
                 key="api_bea_source_year",
                 help="This is the BEA data vintage, not the scorecard year.",
@@ -1130,25 +1180,13 @@ def render_source_workflow(methodology_id: str) -> None:
                 disabled=True,
                 help="Automatically set to the year before the BEA source year.",
             )
-            bea_state = bea_cols[2].text_input(
-                "BEA State",
-                value=state_fips or "06",
-                max_chars=2,
-                key="api_bea_state_fips",
-            )
-            bea_county = bea_cols[3].text_input(
-                "BEA County",
-                value=county_fips or "013",
-                max_chars=3,
-                key="api_bea_county_fips",
-            )
             bea_fields = supported_bea_candidate_fields()
             st.caption(f"{len(bea_fields)} BEA fields selected automatically.")
             if st.button("Fetch BEA", key="api_fetch_bea", disabled=not bea_key_available):
                 try:
                     bea = _cached_bea_source_candidates(
-                        str(bea_state),
-                        str(bea_county),
+                        str(state_fips),
+                        str(county_fips),
                         int(bea_year),
                         int(bea_prior),
                         tuple(bea_fields),
@@ -1178,8 +1216,8 @@ def render_source_workflow(methodology_id: str) -> None:
             if bea_key_available:
                 try:
                     bea = _cached_bea_source_candidates(
-                        str(bea_state),
-                        str(bea_county),
+                        str(state_fips),
+                        str(county_fips),
                         int(bea_year),
                         int(bea_prior),
                         tuple(bea_fields),
