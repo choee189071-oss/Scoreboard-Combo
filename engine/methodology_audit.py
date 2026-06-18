@@ -71,6 +71,8 @@ BASELINE_FIELD_VALUES: Dict[str, float] = {
     "operating_transfers": 0.0,
     "pension_cost": 12_000_000.0,
     "personal_income": 70_000_000_000.0,
+    "county_population": 950_000.0,
+    "issuer_population": 950_000.0,
     "population": 950_000.0,
     "population_current": 960_000.0,
     "population_prior": 940_000.0,

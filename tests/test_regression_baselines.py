@@ -15,33 +15,13 @@ class RegressionBaselineTests(unittest.TestCase):
         expected_status = {
             "moodys_ccd_go": "PASS",
             "moodys_k12": "PASS",
-            "sp_local_gov_k12": "FAIL",
+            "sp_local_gov_k12": "PASS",
             "sp_water_sewer": "PASS",
-            "sp_community_college_go": "FAIL",
+            "sp_community_college_go": "PASS",
         }
         actual_status = dict(zip(regression["methodology_id"], regression["status"]))
         self.assertEqual(actual_status, expected_status)
-
-        known_bad_formulas = {
-            "sp_local_gov_k12": {
-                "gdp_per_capita_ratio",
-                "personal_income_ratio",
-                "net_direct_debt_per_capita",
-                "npl_per_capita",
-            },
-            "sp_community_college_go": {
-                "gdp_per_capita",
-                "personal_income_per_capita",
-            },
-        }
-        failed_rows = regression.set_index("methodology_id").loc[known_bad_formulas.keys()]
-        for methodology_id, expected_ids in known_bad_formulas.items():
-            bad_ids = {
-                item.strip()
-                for item in str(failed_rows.loc[methodology_id, "bad_formula_ids"]).split(";")
-                if item.strip()
-            }
-            self.assertEqual(bad_ids, expected_ids)
+        self.assertFalse(regression["bad_formula_ids"].fillna("").astype(str).str.strip().any())
 
     def test_raw_validation_regression_baseline(self) -> None:
         regression = run_raw_validation_regression()

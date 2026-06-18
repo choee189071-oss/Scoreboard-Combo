@@ -31,6 +31,13 @@ ACS5_VARIABLES = {
     "poverty_universe": "B17001_001E",
 }
 CENSUS_STANDARD_FIELD_SPECS = {
+    "county_population": {
+        "scope": "county",
+        "variables": ["population"],
+        "unit": "count",
+        "source_label": "County population",
+        "notes": "ACS 5-year county population denominator for county GDP and personal-income ratios.",
+    },
     "population": {
         "scope": "county",
         "variables": ["population"],

@@ -94,6 +94,14 @@ BEA_STANDARD_FIELD_SPECS = {
         "source_label": "County personal income",
         "notes": "BEA Regional CAINC1 personal income. Converted to raw dollars using UNIT_MULT.",
     },
+    "county_population": {
+        "scope": "county",
+        "table_name": PERSONAL_INCOME_TABLE,
+        "line_code": POPULATION_LINE_CODE,
+        "unit": "count",
+        "source_label": "County population",
+        "notes": "BEA Regional CAINC1 county population denominator for personal-income ratios.",
+    },
     "us_personal_income": {
         "scope": "us",
         "table_name": PERSONAL_INCOME_TABLE,

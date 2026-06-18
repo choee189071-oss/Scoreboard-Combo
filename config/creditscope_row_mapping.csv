@@ -3,6 +3,7 @@ full_value,Full Value,0,1000,Raw full value in $000s.
 assessed_value,Total Assessed Value,0,1000,Raw assessed value in $000s.
 assessed_value_prior,Total Assessed Value,1,1000,Prior period is the next year column to the right.
 population,Population,0,1,Raw population count.
+issuer_population,Population,0,1,Issuer/service-area population count from CreditScope.
 operating_revenue,Operating Revenue,0,1000,Raw operating revenue in $000s.
 operating_expense,Operating Expenses,0,1000,Raw operating expenses in $000s.
 governmental_revenue,Revenue,0,1000,CreditScope summary raw revenue in $000s.

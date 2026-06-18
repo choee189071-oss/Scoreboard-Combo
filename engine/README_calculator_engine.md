@@ -25,7 +25,9 @@ from engine.formula_engine import calculate_all_formulas
 from engine.formula_engine import calculate_all_formulas, summarize_calculation_results
 
 issuer_data = {
-    "population": 530000,
+    "county_population": 530000,
+    "issuer_population": 125000,
+    "population_us": 335000000,
     "full_value": 40000000000,
     "net_direct_debt": 700000000,
     "operating_revenue": 100000000,

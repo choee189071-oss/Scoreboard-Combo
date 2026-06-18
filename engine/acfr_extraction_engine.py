@@ -40,6 +40,8 @@ DEFAULT_FIELD_HINTS: dict[str, list[str]] = {
         "governmental activities",
         "population",
     ],
+    "issuer_population": ["population", "city population", "demographic", "statistical section"],
+    "county_population": ["county population", "population", "demographic", "statistical section"],
     "npl_per_capita": [
         "net pension liability",
         "proportionate share",

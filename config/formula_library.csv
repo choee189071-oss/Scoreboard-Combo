@@ -6,13 +6,13 @@ gdp_growth,County GDP Growth,(county_gdp_current-county_gdp_prior)/county_gdp_pr
 
 gdp_growth_relative_to_us,County GDP Growth Relative To U.S.,"((county_gdp_current-county_gdp_prior)/county_gdp_prior)-((us_gdp_current-us_gdp_prior)/us_gdp_prior)",county_gdp_current;county_gdp_prior;us_gdp_current;us_gdp_prior,Economy
 
-gdp_per_capita,GDP Per Capita,county_gdp/population,county_gdp;population,Economy
+gdp_per_capita,GDP Per Capita,county_gdp/county_population,county_gdp;county_population,Economy
 
-gdp_per_capita_ratio,GDP Per Capita Ratio,(county_gdp/population)/(us_gdp/population_us),county_gdp;population;us_gdp;population_us,Economy
+gdp_per_capita_ratio,GDP Per Capita Ratio,(county_gdp/county_population)/(us_gdp/population_us),county_gdp;county_population;us_gdp;population_us,Economy
 
-personal_income_per_capita,Personal Income Per Capita,personal_income/population,personal_income;population,Economy
+personal_income_per_capita,Personal Income Per Capita,personal_income/county_population,personal_income;county_population,Economy
 
-personal_income_ratio,Personal Income Ratio,(personal_income/population)/(us_personal_income/population_us),personal_income;population;us_personal_income;population_us,Economy
+personal_income_ratio,Personal Income Ratio,(personal_income/county_population)/(us_personal_income/population_us),personal_income;county_population;us_personal_income;population_us,Economy
 
 resident_income_ratio,Resident Income Ratio,mhi_adjusted_rpp/us_median_income,mhi_adjusted_rpp;us_median_income,Economy
 
@@ -68,7 +68,7 @@ mads_burden,MADS Burden,mads/operating_expense,mads;operating_expense,Debt
 
 cash_to_ltd,Cash To Long-Term Debt,cash_and_investments/long_term_debt,cash_and_investments;long_term_debt,Debt
 
-net_direct_debt_per_capita,Net Direct Debt Per Capita,net_direct_debt/population,net_direct_debt;population,Debt
+net_direct_debt_per_capita,Net Direct Debt Per Capita,net_direct_debt/issuer_population,net_direct_debt;issuer_population,Debt
 
 debt_to_full_value,Debt To Full Value,net_direct_debt/full_value,net_direct_debt;full_value,Debt
 
@@ -76,7 +76,7 @@ debt_to_revenue,Debt To Revenue,net_direct_debt/adjusted_operating_revenue,net_d
 
 fixed_cost_burden_ratio,Fixed Cost Burden Ratio,(debt_service+pension_cost+opeb_cost)/governmental_revenue,debt_service;pension_cost;opeb_cost;governmental_revenue,Debt
 
-npl_per_capita,Net Pension Liability Per Capita,net_pension_liability/population,net_pension_liability;population,Pension
+npl_per_capita,Net Pension Liability Per Capita,net_pension_liability/issuer_population,net_pension_liability;issuer_population,Pension
 
 adjusted_npl_to_full_value,Adjusted NPL To Full Value,adjusted_npl/full_value,adjusted_npl;full_value,Pension
 

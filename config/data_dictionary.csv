@@ -15,6 +15,8 @@ us_median_income,Economy,CensusACS,Manual,API,Raw U.S. median household income
 issuer_mfi,Economy,CensusACS,Manual,API,Raw issuer-area median family income
 us_mfi,Economy,CensusACS,Manual,API,Raw U.S. median family income
 median_household_ebi,Economy,CensusACS,Manual,API,Raw median household income or EBI proxy
+county_population,Demographics,CensusACS|BEA,Manual,API,County-level population denominator for GDP and personal-income ratios
+issuer_population,Demographics,CreditScope,ACFR|OS|Manual,Upload,Issuer or service-area population denominator for debt and pension per-capita formulas
 population,Demographics,CensusACS,CreditScope,API,Raw population
 population_current,Demographics,CensusACS,Manual,API,Raw current-period population
 tax_base_population,Demographics,CensusACS,CreditScope|Manual,API,Raw population denominator for tax-base per-capita formulas; keep separate from generic resident population when methodology geography differs

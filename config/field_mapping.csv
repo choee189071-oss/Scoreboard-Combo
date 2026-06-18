@@ -8,6 +8,7 @@ us_gdp_current,CreditScope,"US GDP Current|U.S. GDP Current|Current US GDP|Curre
 us_gdp_prior,CreditScope,"US GDP Prior|U.S. GDP Prior|Prior US GDP|Prior U.S. GDP",fuzzy,Prior U.S. GDP if present in uploaded workbook
 service_area_population,CreditScope,"Service Area Population|Utility Service Area Population|Service Population",fuzzy,Use only if service area population is explicitly provided
 population,CreditScope,"Population|Resident Population|County Population|District Population",fuzzy,Raw population fallback when Census unavailable
+issuer_population,CreditScope,"Population|Resident Population|Issuer Population|City Population|District Population|Service Area Population",fuzzy,Issuer/service-area population denominator for debt and pension per-capita formulas
 tax_base_population,CensusACS,"Tax Base Population|Taxbase Population|District Population|County Population|Total Population",fuzzy,Raw population denominator for full value per capita; prefer Census/API geography over derived ratios
 operating_revenue,CreditScope,"Operating Revenue|Operating Revenues|Total Operating Revenue|Operating Income",fuzzy,Raw operating revenue only
 operating_expense,CreditScope,"Operating Expense|Operating Expenses|Total Operating Expense|Operating Expenditures",fuzzy,Raw operating expense only
