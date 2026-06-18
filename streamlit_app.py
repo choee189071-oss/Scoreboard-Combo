@@ -500,7 +500,17 @@ with st.container(border=True):
         for warning in warnings:
             st.warning(str(warning))
         with st.expander("Rating summary", expanded=False):
-            st.dataframe(clean_for_display(summarize_rating_output(rating_output)), width="stretch", hide_index=True)
+            rating_summary = clean_for_display(summarize_rating_output(rating_output))
+            if not rating_summary.empty:
+                rating_summary = rating_summary.loc[
+                    :,
+                    [
+                        col
+                        for col in rating_summary.columns
+                        if rating_summary[col].fillna("").astype(str).str.strip().ne("").any()
+                    ],
+                ]
+            st.dataframe(rating_summary, width="stretch", hide_index=True)
         with st.expander("Show Rating Audit Trail", expanded=False):
             audit = build_rating_audit_trail(
                 methodology_id=methodology_id,
