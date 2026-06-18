@@ -68,6 +68,20 @@ CREDITSCOPE_THOUSAND_DOLLAR_FIELDS = {
     "adjusted_opeb",
 }
 
+CREDITSCOPE_SERIES_FIELDS = {
+    "governmental_revenue",
+    "governmental_expense",
+    "operating_revenue",
+    "operating_expense",
+    "operating_transfers",
+    "committed_fund_balance",
+    "assigned_fund_balance",
+    "unassigned_fund_balance",
+    "reserve_revenue",
+}
+
+CREDITSCOPE_SERIES_PERIODS = 3
+
 DERIVED_CREDITSCOPE_LABEL_PATTERNS = [
     r"\bper capita\b",
     r"\bratio\b",
@@ -279,6 +293,8 @@ def _sheet_label_value_frame(ws: Any, value_col: int = 2, max_rows: int = 1200) 
 
 def _scale_creditscope_value(field_name: str, value: Any) -> Any:
     """CreditScope workbook financial statement values are usually shown in $000s."""
+    if isinstance(value, (list, tuple)):
+        return [_scale_creditscope_value(field_name, item) for item in value]
     if field_name not in CREDITSCOPE_THOUSAND_DOLLAR_FIELDS:
         return value
     if value is None or (isinstance(value, float) and pd.isna(value)):
@@ -286,6 +302,40 @@ def _scale_creditscope_value(field_name: str, value: Any) -> Any:
     if isinstance(value, (int, float)):
         return float(value) * 1000.0
     return value
+
+
+def _scale_raw_value(value: Any, scale: float) -> Any:
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return value
+    if isinstance(value, (int, float)):
+        return float(value) * float(scale)
+    return value
+
+
+def _read_creditscope_series(
+    ws: Any,
+    *,
+    row_number: int,
+    start_col: int,
+    scale: float,
+    periods: int = CREDITSCOPE_SERIES_PERIODS,
+) -> tuple[Optional[list[Any]], Optional[str]]:
+    values: list[Any] = []
+    first_col: Optional[int] = None
+    last_col: Optional[int] = None
+    for col_idx in range(start_col, start_col + periods):
+        value = clean_numeric_value(ws.cell(row_number, col_idx).value)
+        if value is None or (isinstance(value, float) and pd.isna(value)):
+            continue
+        value = _scale_raw_value(value, scale)
+        values.append(value)
+        first_col = col_idx if first_col is None else first_col
+        last_col = col_idx
+
+    if len(values) < 2 or first_col is None or last_col is None:
+        return None, None
+    cell_range = f"{ws.title.strip()}!{get_column_letter(first_col)}{row_number}:{get_column_letter(last_col)}{row_number}"
+    return values, cell_range
 
 
 def _load_creditscope_row_mapping(path: Union[str, Path] = DEFAULT_CREDITSCOPE_ROW_MAPPING_PATH) -> pd.DataFrame:
@@ -390,12 +440,33 @@ def map_creditscope_workbook(
                 continue
             row_number = int(by_norm_label[norm_exact]["row"])
             target_col = int(value_col) + int(exact["value_col_offset"])
-            value = clean_numeric_value(ws.cell(row_number, target_col).value)
-            if value is not None and not (isinstance(value, float) and pd.isna(value)):
-                value = float(value) * float(exact["scale"]) if isinstance(value, (int, float)) else value
+            scale = float(exact["scale"])
+            candidate_cell = f"{sheet_title}!{get_column_letter(target_col)}{row_number}"
+            candidate_method = "exact_row_mapping"
+
+            if field_name in CREDITSCOPE_SERIES_FIELDS:
+                series_value, series_cell = _read_creditscope_series(
+                    ws,
+                    row_number=row_number,
+                    start_col=target_col,
+                    scale=scale,
+                )
+                if series_value is not None:
+                    value = series_value
+                    candidate_cell = series_cell
+                    candidate_method = "exact_row_mapping_series"
+                else:
+                    value = clean_numeric_value(ws.cell(row_number, target_col).value)
+                    value = _scale_raw_value(value, scale)
+            else:
+                value = clean_numeric_value(ws.cell(row_number, target_col).value)
+                value = _scale_raw_value(value, scale)
+
+            if value is None or (isinstance(value, float) and pd.isna(value)):
+                continue
             matched_label = str(by_norm_label[norm_exact]["label"])
-            matched_cell = f"{sheet_title}!{get_column_letter(target_col)}{row_number}"
-            method = "exact_row_mapping"
+            matched_cell = candidate_cell
+            method = candidate_method
             confidence = 1.0
             notes = str(exact.get("notes", notes) or notes)
             break
@@ -410,8 +481,24 @@ def map_creditscope_workbook(
             matched_row = by_norm_label.get(normalize_label(matched_label)) if matched_label is not None else None
             value = matched_row.get("value") if matched_row else None
             if matched_row:
-                matched_cell = f"{sheet_title}!{get_column_letter(value_col)}{int(matched_row['row'])}"
-            value = _scale_creditscope_value(field_name, value)
+                row_number = int(matched_row["row"])
+                matched_cell = f"{sheet_title}!{get_column_letter(value_col)}{row_number}"
+                if field_name in CREDITSCOPE_SERIES_FIELDS:
+                    scale = 1000.0 if field_name in CREDITSCOPE_THOUSAND_DOLLAR_FIELDS else 1.0
+                    series_value, series_cell = _read_creditscope_series(
+                        ws,
+                        row_number=row_number,
+                        start_col=int(value_col),
+                        scale=scale,
+                    )
+                    if series_value is not None:
+                        value = series_value
+                        matched_cell = series_cell
+                        method = f"{method}_series"
+                    else:
+                        value = _scale_creditscope_value(field_name, value)
+                else:
+                    value = _scale_creditscope_value(field_name, value)
 
         if matched_label is not None and value is not None and not (isinstance(value, float) and pd.isna(value)):
             issuer_data[field_name] = value

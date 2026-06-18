@@ -125,11 +125,11 @@ def _load_pilot_case_into_session() -> bool:
     return True
 
 
-st.set_page_config(page_title="Source Intake", layout="wide")
+st.set_page_config(page_title="Source Intake Lab", layout="wide")
 init_state()
 page_header(
-    "Source Intake",
-    "Upload source files, create standardized candidates, prioritize blocking fields, and review formula mismatches.",
+    "Source Intake Lab",
+    "Advanced source-candidate tooling. Normal runs should start in Workflow and use Review & Adjust for evidence corrections.",
     "source_intake",
 )
 current_context_card()

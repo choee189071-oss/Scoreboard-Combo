@@ -8,21 +8,20 @@ import streamlit as st
 
 WORKFLOW_STEPS: List[Tuple[str, str, str]] = [
     ("workflow", "1", "Workflow"),
-    ("source_intake", "2", "Source Intake"),
-    ("data_confirmation", "3", "Data Confirmation"),
-    ("data_platform", "4", "Data Platform"),
-    ("audit_platform", "5", "Audit Platform"),
-    ("developer_tools", "6", "Developer Tools"),
+    ("data_confirmation", "2", "Review & Adjust"),
+    ("audit_platform", "3", "Audit"),
 ]
 
 APP_NAME = "Scoreboard Combo"
-BUILD_LABEL = "data-platform-v1"
+BUILD_LABEL = "workflow-led-v1"
 PAGE_LINKS: Dict[str, Tuple[str, str]] = {
     "workflow": ("streamlit_app.py", "Workflow"),
-    "source_intake": ("pages/4_Source_Intake.py", "Source Intake"),
-    "data_confirmation": ("pages/0_Data_Confirmation.py", "Data Confirmation"),
+    "data_confirmation": ("pages/0_Data_Confirmation.py", "Review & Adjust"),
+    "audit_platform": ("pages/2_Audit_Platform.py", "Audit"),
+}
+ADVANCED_PAGE_LINKS: Dict[str, Tuple[str, str]] = {
+    "source_intake": ("pages/4_Source_Intake.py", "Source Intake Lab"),
     "data_platform": ("pages/3_Data_Platform.py", "Data Platform"),
-    "audit_platform": ("pages/2_Audit_Platform.py", "Audit Platform"),
     "developer_tools": ("pages/1_Developer_Tools.py", "Developer Tools"),
 }
 
@@ -191,12 +190,25 @@ def inject_css() -> None:
 
 
 def render_sidebar_navigation(active: str) -> None:
+    def safe_page_link(path: str, label: str) -> None:
+        try:
+            st.page_link(path, label=label)
+        except Exception:
+            st.markdown(label)
+
     st.sidebar.markdown(f'<div class="cs-sidebar-title">{APP_NAME}</div>', unsafe_allow_html=True)
-    for key, (path, label) in PAGE_LINKS.items():
-        if key == active:
-            st.sidebar.markdown(f'<div class="cs-sidebar-active">{label}</div>', unsafe_allow_html=True)
-        else:
-            st.sidebar.page_link(path, label=label)
+    with st.sidebar:
+        for key, (path, label) in PAGE_LINKS.items():
+            if key == active:
+                st.markdown(f'<div class="cs-sidebar-active">{label}</div>', unsafe_allow_html=True)
+            else:
+                safe_page_link(path, label)
+        with st.expander("Advanced / QA", expanded=active in ADVANCED_PAGE_LINKS):
+            for key, (path, label) in ADVANCED_PAGE_LINKS.items():
+                if key == active:
+                    st.markdown(f'<div class="cs-sidebar-active">{label}</div>', unsafe_allow_html=True)
+                else:
+                    safe_page_link(path, label)
     st.sidebar.markdown(
         f'<div class="cs-sidebar-build">Build: {BUILD_LABEL}</div>',
         unsafe_allow_html=True,
@@ -278,7 +290,7 @@ def current_context_card() -> None:
           <span class="cs-pill">{methodology}</span>
           <span class="cs-pill">{issuer}</span>
           <span class="cs-pill">FY {year}</span>
-          <div class="cs-muted" style="margin-top:6px;">This context is used across the Workflow and Developer Tools pages.</div>
+          <div class="cs-muted" style="margin-top:6px;">This context is shared by Workflow, Review & Adjust, and Audit.</div>
         </div>
         """,
         unsafe_allow_html=True,

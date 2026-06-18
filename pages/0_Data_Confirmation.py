@@ -13,19 +13,19 @@ from utils.data_confirmation import render_data_confirmation_workflow
 from utils.ui_helpers import current_context_card, init_state, page_header
 
 
-st.set_page_config(page_title="Data Confirmation", layout="wide")
+st.set_page_config(page_title="Review & Adjust", layout="wide")
 init_state()
 
 page_header(
-    "Data Confirmation",
-    "Decision queue for true rating blockers, ACFR/API evidence checks, AI extraction, and approved values.",
+    "Review & Adjust",
+    "Investigate the current Workflow issuer_data, confirm evidence, and apply only approved replacements back to the same table.",
     "data_confirmation",
 )
 current_context_card()
 
 st.info(
-    "Start with Rating Readiness. Blocking Required fields affect scoring; Rating Inputs are evidence checks; "
-    "Optional / Contextual rows do not block the current bond type."
+    "Workflow remains the source of truth. This page starts from the saved issuer_data table; evidence or manual changes "
+    "only affect scoring after you save/apply them here and rerun formulas."
 )
 try:
     st.page_link("streamlit_app.py", label="Open Workflow")

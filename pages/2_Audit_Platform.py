@@ -117,10 +117,10 @@ def _missing_workbooks() -> list[Path]:
     return [case.workbook_path for case in CASES if not case.workbook_path.exists()]
 
 
-st.set_page_config(page_title="Audit Platform", layout="wide")
+st.set_page_config(page_title="Audit", layout="wide")
 init_state()
 page_header(
-    "Audit Platform",
+    "Audit",
     "No-cheat benchmark audit for methodology accuracy, raw field coverage, and workbook page consistency.",
     "audit_platform",
 )

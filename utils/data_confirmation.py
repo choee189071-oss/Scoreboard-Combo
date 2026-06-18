@@ -10,7 +10,7 @@ from typing import Any, Dict, Iterable, List
 import pandas as pd
 import streamlit as st
 
-from engine.calculator_engine import calculate_all_formulas
+from engine.calculator_engine import calculate_all_formulas, clean_numeric
 from engine.acfr_extraction_engine import (
     extract_all_pdf_pages,
     normalize_pdf_documents,
@@ -729,7 +729,7 @@ def confirmed_inputs_to_issuer_data(methodology_id: str | None = None) -> dict[s
     """Return confirmed inputs for the current context as formula-ready issuer_data overrides."""
     _ = methodology_id
     return {
-        field: row.get("confirmed_value")
+        field: clean_numeric(row.get("confirmed_value"))
         for field, row in _confirmed_value_lookup().items()
         if _has_value(row.get("confirmed_value"))
     }
@@ -1586,6 +1586,52 @@ def _save_confirmed_field(row: pd.Series, confirmed_row: dict[str, Any]) -> None
             checks.loc[mask, "review_note"] = confirmed_row.get("evidence_note", "")
             checks.loc[mask, "evidence_source"] = confirmed_row.get("confirmed_source", "")
         st.session_state["data_confirmation_checks"] = checks
+    _apply_confirmed_row_to_workflow_state(confirmed_row)
+
+
+def _apply_confirmed_row_to_workflow_state(confirmed_row: dict[str, Any]) -> bool:
+    status = str(confirmed_row.get("status", "") or "").strip().lower()
+    if status != "verified":
+        return False
+    field = str(confirmed_row.get("field_name", "") or "").strip()
+    value = clean_numeric(confirmed_row.get("confirmed_value"))
+    if not field or not _has_value(value):
+        return False
+
+    issuer_data = dict(st.session_state.get("issuer_data", {}) or {})
+    issuer_data[field] = value
+    st.session_state["issuer_data"] = issuer_data
+    st.session_state["source_saved_needs_formula_run"] = True
+    st.session_state["formula_results"] = pd.DataFrame()
+    st.session_state["methodology_formula_results"] = pd.DataFrame()
+    st.session_state["rating_output"] = None
+
+    source_name = str(confirmed_row.get("source_type", "") or "").strip() or "Manual"
+    source_label = str(confirmed_row.get("confirmed_source", "") or "").strip()
+    candidate = normalize_source_candidates(
+        [
+            {
+                "field_name": field,
+                "value": value,
+                "source_name": source_name,
+                "source_type": "Manual" if source_name == "Manual" else "Document",
+                "source_detail": "review_adjust_confirmed_input",
+                "confidence": confirmed_row.get("confidence_score", 0.75),
+                "source_file": "",
+                "source_table": "",
+                "source_cell_or_api": source_label,
+                "source_label": source_label,
+                "candidate_status": "ready",
+                "notes": confirmed_row.get("evidence_note", ""),
+            }
+        ]
+    )
+    existing = st.session_state.get("approved_source_candidates")
+    if isinstance(existing, pd.DataFrame) and not existing.empty:
+        existing = existing[existing["field_name"].astype(str).ne(field)].copy()
+        candidate = normalize_source_candidates(pd.concat([existing, candidate], ignore_index=True, sort=False))
+    st.session_state["approved_source_candidates"] = candidate
+    return True
 
 
 def _evidence_source_label(row: pd.Series) -> str:
@@ -2248,6 +2294,48 @@ def _render_step_1_context() -> None:
     cols[0].metric("Issuer", st.session_state.get("issuer_name") or "Not set")
     cols[1].metric("Methodology", st.session_state.get("methodology_id") or "Not set")
     cols[2].metric("Fiscal Year", st.session_state.get("analysis_year") or "Not set")
+
+
+def _render_workflow_issuer_data_snapshot() -> None:
+    issuer_data = dict(st.session_state.get("issuer_data", {}) or {})
+    st.markdown("**Current Workflow issuer_data**")
+    if not issuer_data:
+        st.info("No issuer_data is saved yet. Start in Workflow > Source Data, then return here to review or replace values.")
+        return
+
+    source_report = st.session_state.get("source_report")
+    source_lookup: dict[str, str] = {}
+    if isinstance(source_report, pd.DataFrame) and not source_report.empty and "field_name" in source_report.columns:
+        selected = selected_source_report(source_report)
+        if isinstance(selected, pd.DataFrame) and not selected.empty:
+            for _, row in selected.iterrows():
+                field = str(row.get("field_name", "") or "").strip()
+                source_parts = [
+                    str(row.get("canonical_source") or row.get("source_name") or "").strip(),
+                    str(row.get("source_file") or "").strip(),
+                    str(row.get("source_cell_or_api") or row.get("source_table") or "").strip(),
+                ]
+                if field:
+                    source_lookup[field] = ": ".join(part for part in source_parts if part)
+
+    rows = [
+        {
+            "field_name": field,
+            "current_value": value,
+            "current_source": source_lookup.get(field, "issuer_data"),
+        }
+        for field, value in sorted(issuer_data.items())
+    ]
+    cols = st.columns(3)
+    cols[0].metric("Current Inputs", len(rows))
+    cols[1].metric("Confirmed Overrides", len(_confirmed_value_lookup()))
+    approved = st.session_state.get("approved_source_candidates")
+    cols[2].metric("Approved Candidates", len(approved) if isinstance(approved, pd.DataFrame) else 0)
+    st.caption(
+        "This is the same table used by Workflow formulas. Verified replacements saved below are written back here and require a formula rerun."
+    )
+    with st.expander("View current issuer_data table", expanded=False):
+        st.dataframe(clean_for_display(pd.DataFrame(rows)), width="stretch", hide_index=True)
 
 
 def _render_step_2_file_registry() -> pd.DataFrame:
@@ -3407,11 +3495,12 @@ def _render_human_workflow_cards() -> None:
 
     render_rating_readiness_overview(methodology_id, expanded=False)
     _render_operating_lanes(methodology_id)
+    _render_workflow_issuer_data_snapshot()
 
     with st.expander("A. Rating Path - required to produce or refresh the rating", expanded=True):
         st.caption(
-            "This is the main workflow. Data enters the formula layer here; B and C are only needed when you want "
-            "ACFR/API/OS validation or replacements."
+            "This starts from the issuer_data saved in Workflow. Confirmed replacements from this page are written back "
+            "to that same table and formulas must be rerun afterward."
         )
         st.markdown("**A1. Deal and source context**")
         _render_step_1_context()
@@ -3471,61 +3560,62 @@ def render_data_confirmation_workflow(methodology_id: str) -> None:
     if notice:
         st.success(notice)
     st.caption(
-        "Operational validation workflow: first resolve true rating blockers, then verify rating-driving values "
-        "with ACFR/API/workbook evidence, then approve only the values that should flow into outputs."
+        "Review & Adjust starts from the Workflow issuer_data table. Investigate evidence here, then apply only "
+        "verified replacements back to that same table."
     )
 
-    tabs = st.tabs(["Decision Queue", "File Registry", "Field Checklist", "ACFR Automation", "Status Definitions"])
+    tabs = st.tabs(["Review & Adjust", "Reference"])
     with tabs[0]:
         _render_human_workflow_cards()
-        with st.expander("View workflow as table", expanded=False):
+    with tabs[1]:
+        with st.expander("File registry", expanded=True):
+            current_registry = _current_source_registry()
+            if not current_registry.empty:
+                st.write("Current session uploads")
+                st.dataframe(clean_for_display(current_registry), width="stretch", hide_index=True)
+            st.write("West Sacramento pilot registry")
+            st.dataframe(
+                clean_for_display(_frame(SP_LOCAL_GOV_FILE_REGISTRY)),
+                width="stretch",
+                hide_index=True,
+            )
+        with st.expander("Field checklist", expanded=False):
+            if methodology_id == "sp_local_gov_k12":
+                checklist = _frame(SP_LOCAL_GOV_FIELD_CHECKLIST)
+            else:
+                checklist = pd.DataFrame(
+                    [
+                        {
+                            "factor": "All",
+                            "field_or_metric": "Methodology fields",
+                            "primary_check": "Use Data Completeness Review to resolve missing values before documentary validation.",
+                            "preferred_evidence": "Issuer-specific source document, API record, or approved manual input.",
+                            "approval_note": "Evidence Workbench should only test fields that already have system values.",
+                        }
+                    ]
+                )
+            st.dataframe(clean_for_display(checklist), width="stretch", hide_index=True)
+        with st.expander("ACFR automation plan", expanded=False):
+            _render_acfr_automation_plan()
+        with st.expander("Status definitions", expanded=False):
+            st.write("Priority class definitions")
+            st.dataframe(
+                clean_for_display(_frame(REQUIREMENT_CLASS_RULES)),
+                width="stretch",
+                hide_index=True,
+            )
+            st.write("Approval and evidence status definitions")
+            st.dataframe(
+                clean_for_display(_frame(APPROVAL_STATUS_RULES)),
+                width="stretch",
+                hide_index=True,
+            )
+        with st.expander("Workflow model", expanded=False):
             st.dataframe(
                 clean_for_display(_frame(HUMAN_WORKFLOW_STEPS)),
                 width="stretch",
                 hide_index=True,
             )
-    with tabs[1]:
-        current_registry = _current_source_registry()
-        if not current_registry.empty:
-            st.write("Current session uploads")
-            st.dataframe(clean_for_display(current_registry), width="stretch", hide_index=True)
-        st.write("West Sacramento pilot registry")
-        st.dataframe(
-            clean_for_display(_frame(SP_LOCAL_GOV_FILE_REGISTRY)),
-            width="stretch",
-            hide_index=True,
-        )
-    with tabs[2]:
-        if methodology_id == "sp_local_gov_k12":
-            checklist = _frame(SP_LOCAL_GOV_FIELD_CHECKLIST)
-        else:
-            checklist = pd.DataFrame(
-                [
-                    {
-                        "factor": "All",
-                        "field_or_metric": "Methodology fields",
-                        "primary_check": "Use Data Completeness Review to resolve missing values before documentary validation.",
-                        "preferred_evidence": "Issuer-specific source document, API record, or approved manual input.",
-                        "approval_note": "Evidence Workbench should only test fields that already have system values.",
-                    }
-                ]
-            )
-        st.dataframe(clean_for_display(checklist), width="stretch", hide_index=True)
-    with tabs[3]:
-        _render_acfr_automation_plan()
-    with tabs[4]:
-        st.write("Priority class definitions")
-        st.dataframe(
-            clean_for_display(_frame(REQUIREMENT_CLASS_RULES)),
-            width="stretch",
-            hide_index=True,
-        )
-        st.write("Approval and evidence status definitions")
-        st.dataframe(
-            clean_for_display(_frame(APPROVAL_STATUS_RULES)),
-            width="stretch",
-            hide_index=True,
-        )
         st.download_button(
             "Download data_confirmation_plan.csv",
             data=data_confirmation_export().to_csv(index=False).encode("utf-8"),

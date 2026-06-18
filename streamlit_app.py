@@ -355,12 +355,12 @@ with st.container(border=True):
 render_rating_readiness_overview(methodology_id, expanded=False)
 
 with st.container(border=True):
-    st.markdown("**Evidence Confidence**")
+    st.markdown("**Review & Adjust**")
     st.caption(
-        "Use Data Confirmation when you want to verify or replace values after the rating path is working. "
-        "ACFR/API/OS evidence does not change formula inputs until an approved value is applied."
+        "Use this after saving issuer_data when you want to verify, replace, or manually correct values. "
+        "Approved changes flow back into the same Workflow input table and clear stale rating output."
     )
-    st.page_link("pages/0_Data_Confirmation.py", label="Open Data Confirmation")
+    st.page_link("pages/0_Data_Confirmation.py", label="Open Review & Adjust")
 
 issuer_data = st.session_state.get("issuer_data", {}) or {}
 formula_results = st.session_state.get("methodology_formula_results")

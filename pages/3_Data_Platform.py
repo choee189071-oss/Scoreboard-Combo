@@ -68,7 +68,7 @@ st.set_page_config(page_title="Data Platform", layout="wide")
 init_state()
 page_header(
     "Data Platform",
-    "Source registry and field dictionary workspace for canonical data lineage.",
+    "Advanced source registry, field dictionary, and canonical data-lineage workspace.",
     "data_platform",
 )
 current_context_card()

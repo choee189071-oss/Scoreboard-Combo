@@ -156,6 +156,13 @@ def clean_numeric(value: Any) -> Any:
     text = str(value).strip()
     if text.lower() in {"na", "n/a", "none", "null", "missing", "--", "-"}:
         return None
+    if text.startswith("[") and text.endswith("]"):
+        try:
+            parsed = ast.literal_eval(text)
+            if isinstance(parsed, (list, tuple)):
+                return [clean_numeric(item) for item in parsed]
+        except Exception:
+            pass
 
     negative = False
     if text.startswith("(") and text.endswith(")"):

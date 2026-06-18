@@ -17,7 +17,7 @@ from connectors.census_api import (
     supported_census_candidate_fields,
 )
 from connectors.creditscope_loader import load_creditscope_source_candidates
-from engine.calculator_engine import calculate_all_formulas, load_formula_library, parse_required_fields
+from engine.calculator_engine import calculate_all_formulas, clean_numeric, load_formula_library, parse_required_fields
 from engine.data_sourcing_engine import (
     DIRECT_METRIC_SOURCE_FIELDS,
     mapping_report_to_source_candidates,
@@ -51,7 +51,7 @@ SOURCE_SESSION_KEYS = {
     "workbook_direct_metric_debug",
 }
 
-SOURCE_WORKFLOW_CACHE_VERSION = "population-denominator-split-v1"
+SOURCE_WORKFLOW_CACHE_VERSION = "creditscope-multiyear-v1"
 LATEST_CENSUS_SOURCE_YEAR = 2024
 LATEST_BEA_SOURCE_YEAR = 2024
 ISSUER_DATA_EDITOR_EXCLUDED_FIELDS = set(DIRECT_METRIC_SOURCE_FIELDS)
@@ -574,10 +574,10 @@ def _clean_input_value(value: Any) -> Any:
         pass
     if str(value).strip() == "":
         return None
-    try:
-        return float(value)
-    except Exception:
-        return str(value).strip()
+    cleaned = clean_numeric(value)
+    if cleaned is not None:
+        return cleaned
+    return str(value).strip()
 
 
 def _editor_text_value(value: Any) -> str:
@@ -598,6 +598,19 @@ def _values_match(left: Any, right: Any) -> bool:
         return True
     if left_clean is None or right_clean is None:
         return False
+    if isinstance(left_clean, list) or isinstance(right_clean, list):
+        if not isinstance(left_clean, list) or not isinstance(right_clean, list):
+            return False
+        if len(left_clean) != len(right_clean):
+            return False
+        for left_item, right_item in zip(left_clean, right_clean):
+            try:
+                if abs(float(left_item) - float(right_item)) > 1e-9:
+                    return False
+            except Exception:
+                if str(left_item).strip() != str(right_item).strip():
+                    return False
+        return True
     try:
         return abs(float(left_clean) - float(right_clean)) <= 1e-9
     except Exception:
