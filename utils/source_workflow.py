@@ -580,6 +580,17 @@ def _clean_input_value(value: Any) -> Any:
         return str(value).strip()
 
 
+def _editor_text_value(value: Any) -> str:
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except Exception:
+        pass
+    return str(value)
+
+
 def _values_match(left: Any, right: Any) -> bool:
     left_clean = _clean_input_value(left)
     right_clean = _clean_input_value(right)
@@ -660,7 +671,7 @@ def _build_issuer_data_editor(
         rows.append(
             {
                 "field_name": field,
-                "value": "" if value is None else value,
+                "value": _editor_text_value(value),
                 "source_status": status,
                 "source_used": source_used,
                 "used_by": row.get("used_by", ""),
@@ -775,10 +786,11 @@ def _manual_raw_gap_input_frame(missing: pd.DataFrame) -> pd.DataFrame:
         field = str(row.get("field_name", "") or "").strip()
         if not field:
             continue
+        manual_value = _clean_input_value(manual_values.get(field))
         rows.append(
             {
                 "field_name": field,
-                "manual_value": manual_values.get(field, ""),
+                "manual_value": manual_value,
                 "unit": row.get("unit", "") or "dollars",
                 "notes": (
                     "For West Sacramento, use 0 only if confirming the scorecard has no transfer adjustment."
@@ -787,7 +799,10 @@ def _manual_raw_gap_input_frame(missing: pd.DataFrame) -> pd.DataFrame:
                 ),
             }
         )
-    return pd.DataFrame(rows, columns=["field_name", "manual_value", "unit", "notes"])
+    out = pd.DataFrame(rows, columns=["field_name", "manual_value", "unit", "notes"])
+    if "manual_value" in out.columns:
+        out["manual_value"] = pd.to_numeric(out["manual_value"], errors="coerce")
+    return out
 
 
 def _render_manual_raw_gap_form(missing: pd.DataFrame, methodology_id: str) -> None:
