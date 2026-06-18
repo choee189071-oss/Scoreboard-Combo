@@ -19,6 +19,7 @@ from connectors.census_api import (
 from connectors.creditscope_loader import load_creditscope_source_candidates
 from engine.calculator_engine import calculate_all_formulas, load_formula_library, parse_required_fields
 from engine.data_sourcing_engine import (
+    DIRECT_METRIC_SOURCE_FIELDS,
     mapping_report_to_source_candidates,
     manual_data_to_source_candidates,
     required_fields_for_methodology,
@@ -50,9 +51,10 @@ SOURCE_SESSION_KEYS = {
     "workbook_direct_metric_debug",
 }
 
-SOURCE_WORKFLOW_CACHE_VERSION = "creditscope-single-sheet-v2"
+SOURCE_WORKFLOW_CACHE_VERSION = "issuer-input-raw-fields-v1"
 LATEST_CENSUS_SOURCE_YEAR = 2024
 LATEST_BEA_SOURCE_YEAR = 2024
+ISSUER_DATA_EDITOR_EXCLUDED_FIELDS = set(DIRECT_METRIC_SOURCE_FIELDS)
 
 
 SOURCE_WORKFLOW_GUIDE: list[dict[str, str]] = [
@@ -625,6 +627,8 @@ def _build_issuer_data_editor(
     for _, row in required_fields.iterrows():
         field = str(row.get("field_name", "") or "").strip()
         if not field:
+            continue
+        if field in ISSUER_DATA_EDITOR_EXCLUDED_FIELDS:
             continue
         selected_row = selected_lookup.get(field)
         status = "missing"
@@ -1240,7 +1244,8 @@ def render_source_workflow(methodology_id: str) -> None:
         st.markdown("**Step 3. Save issuer_data**" if guided_mode else "**Save issuer_data**")
         st.caption(
             "This is the official calculation input table. Values found from uploads/API/approved sources are prefilled; "
-            "required fields that are not found stay blank. Type manual replacements directly in the value column."
+            "required raw fields that are not found stay blank. Derived ratios are calculated later in Formula Results, "
+            "not typed here. Type manual replacements directly in the value column."
         )
         frames = _source_candidate_frames(include_manual_values=False)
         issuer_data_editor, source_context = _build_issuer_data_editor(

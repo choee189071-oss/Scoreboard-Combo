@@ -6,7 +6,9 @@ population,Population,0,1,Raw population count.
 operating_revenue,Operating Revenue,0,1000,Raw operating revenue in $000s.
 operating_expense,Operating Expenses,0,1000,Raw operating expenses in $000s.
 governmental_revenue,Revenue,0,1000,CreditScope summary raw revenue in $000s.
+governmental_revenue,Total Governmental Revenue (from all Governmental Funds),0,1000,Raw total governmental funds revenue in $000s.
 governmental_expense,Total Expenses,0,1000,CreditScope summary raw expense in $000s.
+governmental_expense,Total Governmental Expenditure (from all Governmental Funds),0,1000,Raw total governmental funds expenditure in $000s.
 adjusted_operating_revenue,Adjusted Total Operating Rev,0,1000,Raw adjusted operating revenue in $000s.
 fund_balance,Fund Balance,0,1000,Raw fund balance in $000s when detailed components are unavailable.
 cash,Total Cash,0,1000,Raw total cash in $000s.
@@ -14,8 +16,14 @@ cash_and_investments,Total Cash,0,1000,Use raw total cash as cash/investments pr
 revenue,Revenue,0,1000,Raw revenue denominator in $000s.
 debt,Total Debt,0,1000,Raw total debt in $000s.
 long_term_debt,Total Long-Term Debt,0,1000,Raw long-term debt in $000s.
+net_direct_debt,Net Direct Debt,0,1000,Raw net direct debt in $000s.
+debt_service,Current Debt Service (from all Governmental Funds),0,1000,Raw current debt service from governmental funds in $000s.
 mads,Max Debt Service,0,1000,Raw maximum debt service in $000s.
 pension_cost,"Total Pension Contributions (Single, Agent & Cost-Sharing)",0,1000,Raw pension contributions in $000s.
 opeb_cost,"Total OPEB Contributions (Single, Agent & Cost-Sharing)",0,1000,Raw OPEB contributions in $000s.
 net_pension_liability,Pension Liability,0,1000,Raw pension liability in $000s.
 adjusted_npl,Pension Liability,0,1000,Temporary raw proxy for Moody's adjusted NPL until Moody's pension workbook is parsed.
+committed_fund_balance,Committed to,0,1000,Raw committed fund balance in $000s.
+assigned_fund_balance,Assigned,0,1000,Raw assigned fund balance in $000s.
+unassigned_fund_balance,Unassigned,0,1000,Raw unassigned fund balance in $000s.
+reserve_revenue,Total Governmental Revenue (from all Governmental Funds),0,1000,Reserve denominator revenue from governmental funds in $000s.
