@@ -565,7 +565,14 @@ def _source_candidate_frames(include_manual_values: bool) -> list[pd.DataFrame]:
 
 
 def _clean_input_value(value: Any) -> Any:
-    if value is None or str(value).strip() == "":
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+    if str(value).strip() == "":
         return None
     try:
         return float(value)
@@ -717,10 +724,114 @@ def _save_issuer_data_from_editor(
         st.info("Formula and scoreboard outputs were cleared. Run formulas next when you are ready.")
 
 
-def _readiness_tabs(source_report: pd.DataFrame) -> None:
+def _save_manual_raw_gap_values(
+    edited_inputs: pd.DataFrame,
+    *,
+    methodology_id: str,
+    run_formulas: bool,
+) -> None:
+    manual_values = dict(st.session_state.get("manual_source_values", {}) or {})
+    updated: Dict[str, Any] = {}
+    if isinstance(edited_inputs, pd.DataFrame) and not edited_inputs.empty:
+        for _, row in edited_inputs.iterrows():
+            field = str(row.get("field_name", "") or "").strip()
+            value = _clean_input_value(row.get("manual_value"))
+            if not field or value is None:
+                continue
+            manual_values[field] = value
+            updated[field] = value
+
+    if not updated:
+        st.warning("No manual values were entered.")
+        return
+
+    st.session_state["manual_source_values"] = manual_values
+    frames = _source_candidate_frames(include_manual_values=True)
+    required_names = required_fields_for_methodology(methodology_id)
+    result = run_data_sourcing_pipeline(
+        frames,
+        methodology_id=methodology_id,
+        required_fields=required_names,
+    )
+    issuer_data = result.get("issuer_data", {})
+    st.session_state["issuer_data"] = issuer_data
+    st.session_state["source_candidates"] = result.get("source_candidates", pd.DataFrame())
+    st.session_state["source_report"] = result.get("source_report", pd.DataFrame())
+    st.session_state["source_readiness_summary"] = result.get("source_readiness_summary", pd.DataFrame())
+    _clear_formula_rating_outputs()
+    st.session_state["source_saved_needs_formula_run"] = True
+    st.session_state["manual_raw_gap_save_notice"] = f"Saved {len(updated)} manual raw value(s) into issuer_data."
+    if run_formulas:
+        formula_results = _run_formulas_after_source_save(methodology_id, issuer_data)
+        st.session_state["manual_raw_gap_save_notice"] += f" Ran formulas from updated issuer_data; {len(formula_results)} formula rows saved."
+    else:
+        st.session_state["manual_raw_gap_save_notice"] += " Formula and scoreboard outputs were cleared."
+
+
+def _manual_raw_gap_input_frame(missing: pd.DataFrame) -> pd.DataFrame:
+    manual_values = st.session_state.get("manual_source_values", {}) or {}
+    rows: list[dict[str, Any]] = []
+    for _, row in missing.iterrows():
+        field = str(row.get("field_name", "") or "").strip()
+        if not field:
+            continue
+        rows.append(
+            {
+                "field_name": field,
+                "manual_value": manual_values.get(field, ""),
+                "unit": row.get("unit", "") or "dollars",
+                "notes": (
+                    "For West Sacramento, use 0 only if confirming the scorecard has no transfer adjustment."
+                    if field == "operating_transfers"
+                    else ""
+                ),
+            }
+        )
+    return pd.DataFrame(rows, columns=["field_name", "manual_value", "unit", "notes"])
+
+
+def _render_manual_raw_gap_form(missing: pd.DataFrame, methodology_id: str) -> None:
+    if not isinstance(missing, pd.DataFrame) or missing.empty:
+        return
+    with st.form(f"manual_raw_gap_form_{methodology_id}"):
+        st.markdown("**Manual raw value entry**")
+        st.caption(
+            "Use this only when the analyst has confirmed the value from ACFR/OS/CreditScope support or a policy assumption. "
+            "Saved manual values become Manual source candidates and flow into issuer_data."
+        )
+        manual_inputs = st.data_editor(
+            _manual_raw_gap_input_frame(missing),
+            width="stretch",
+            hide_index=True,
+            num_rows="fixed",
+            key=f"manual_raw_gap_editor_{methodology_id}",
+            column_config={
+                "field_name": st.column_config.TextColumn("field_name", disabled=True),
+                "manual_value": st.column_config.NumberColumn("manual_value"),
+                "unit": st.column_config.TextColumn("unit", disabled=True),
+                "notes": st.column_config.TextColumn("notes", disabled=True),
+            },
+        )
+        cols = st.columns(2)
+        save_manual = cols[0].form_submit_button("Save manual raw values", type="primary")
+        save_manual_run = cols[1].form_submit_button("Save manual values and run formulas")
+
+    if save_manual or save_manual_run:
+        _save_manual_raw_gap_values(
+            manual_inputs,
+            methodology_id=methodology_id,
+            run_formulas=save_manual_run,
+        )
+        st.rerun()
+
+
+def _readiness_tabs(source_report: pd.DataFrame, methodology_id: str) -> None:
     if not isinstance(source_report, pd.DataFrame) or source_report.empty:
         st.info("No source report saved yet.")
         return
+    notice = st.session_state.pop("manual_raw_gap_save_notice", "")
+    if notice:
+        st.success(notice)
     selected = selected_source_report(source_report)
     if "field_name" in selected.columns:
         direct_metric_mask = selected["field_name"].astype(str).isin(ISSUER_DATA_EDITOR_EXCLUDED_FIELDS)
@@ -786,6 +897,8 @@ def _readiness_tabs(source_report: pd.DataFrame) -> None:
                         "support-tab direct metric. They are not manual issuer_data inputs."
                     )
                 st.dataframe(clean_for_display(frame), width="stretch", hide_index=True)
+                if idx == 0:
+                    _render_manual_raw_gap_form(frame, methodology_id)
 
 
 def _uploaded_sources_summary() -> pd.DataFrame:
@@ -1310,4 +1423,4 @@ def render_source_workflow(methodology_id: str) -> None:
             )
 
     with st.expander("Support inventory readiness (advanced, not rating blockers)", expanded=False):
-        _readiness_tabs(st.session_state.get("source_report", pd.DataFrame()))
+        _readiness_tabs(st.session_state.get("source_report", pd.DataFrame()), methodology_id)
