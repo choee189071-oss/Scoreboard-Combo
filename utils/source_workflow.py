@@ -9,8 +9,13 @@ import pandas as pd
 import streamlit as st
 from openpyxl import load_workbook
 
-from connectors.bea_api import BeaApiError, fetch_bea_source_candidates, supported_bea_candidate_fields
-from connectors.census_api import CensusApiError, fetch_census_source_candidates, supported_census_candidate_fields
+from connectors.bea_api import BeaApiError, fetch_bea_source_candidates, get_bea_api_key, supported_bea_candidate_fields
+from connectors.census_api import (
+    CensusApiError,
+    fetch_census_source_candidates,
+    get_census_api_key,
+    supported_census_candidate_fields,
+)
 from connectors.creditscope_loader import load_creditscope_source_candidates
 from engine.calculator_engine import calculate_all_formulas, load_formula_library, parse_required_fields
 from engine.data_sourcing_engine import (
@@ -105,6 +110,11 @@ def _show_api_fetch_error(source_label: str, exc: Exception) -> None:
         st.caption("Try a published ACS year, confirm state/county FIPS, or use manual/source confirmation for this run.")
     elif source_label == "BEA":
         st.caption("Confirm the BEA API key, year, and county FIPS. You can continue without BEA candidates and fill economy fields later.")
+
+
+def _show_missing_api_key(source_label: str, secret_name: str) -> None:
+    st.info(f"{source_label} is optional and is currently disabled because `{secret_name}` is not configured.")
+    st.caption(f"To enable it on Streamlit Cloud, add `{secret_name}` in App settings > Secrets, then reboot the app.")
 
 
 @st.cache_data(show_spinner=False)
@@ -878,6 +888,9 @@ def render_source_workflow(methodology_id: str) -> None:
         c1, c2 = st.columns(2)
         with c1:
             st.write("Census ACS")
+            census_key_available = bool(get_census_api_key())
+            if not census_key_available:
+                _show_missing_api_key("Census ACS", "CENSUS_API_KEY")
             census_cols = st.columns(3)
             census_year = census_cols[0].number_input("ACS year", min_value=2009, max_value=2024, value=2024, step=1)
             state_fips = census_cols[1].text_input("State FIPS", value=default_state_fips, max_chars=2)
@@ -887,7 +900,7 @@ def render_source_workflow(methodology_id: str) -> None:
             include_proxy = st.checkbox("Include proxy fields", value=False)
             census_fields = supported_census_candidate_fields(include_proxy_fields=include_proxy)
             st.caption(f"{len(census_fields)} Census fields selected automatically.")
-            if st.button("Fetch Census", key="api_fetch_census"):
+            if st.button("Fetch Census", key="api_fetch_census", disabled=not census_key_available):
                 try:
                     census = _cached_census_source_candidates(
                         str(state_fips),
@@ -903,6 +916,9 @@ def render_source_workflow(methodology_id: str) -> None:
                     _show_api_fetch_error("Census ACS", exc)
         with c2:
             st.write("BEA Regional")
+            bea_key_available = bool(get_bea_api_key())
+            if not bea_key_available:
+                _show_missing_api_key("BEA Regional", "BEA_API_KEY")
             bea_cols = st.columns(4)
             bea_year = bea_cols[0].number_input("BEA year", min_value=2001, max_value=2024, value=2024, step=1)
             bea_prior = bea_cols[1].number_input("BEA prior", min_value=2000, max_value=2023, value=2023, step=1)
@@ -910,7 +926,7 @@ def render_source_workflow(methodology_id: str) -> None:
             bea_county = bea_cols[3].text_input("BEA County", value=county_fips or "013", max_chars=3)
             bea_fields = supported_bea_candidate_fields()
             st.caption(f"{len(bea_fields)} BEA fields selected automatically.")
-            if st.button("Fetch BEA", key="api_fetch_bea"):
+            if st.button("Fetch BEA", key="api_fetch_bea", disabled=not bea_key_available):
                 try:
                     bea = _cached_bea_source_candidates(
                         str(bea_state),
@@ -924,34 +940,37 @@ def render_source_workflow(methodology_id: str) -> None:
                     st.success(f"Fetched {len(bea)} BEA candidate fields.")
                 except BeaApiError as exc:
                     _show_api_fetch_error("BEA", exc)
-        if st.button("Fetch Census + BEA", key="api_fetch_all", type="primary"):
+        can_fetch_any_api = census_key_available or bea_key_available
+        if st.button("Fetch Census + BEA", key="api_fetch_all", type="primary", disabled=not can_fetch_any_api):
             fetched: list[str] = []
-            try:
-                census = _cached_census_source_candidates(
-                    str(state_fips),
-                    str(county_fips),
-                    int(census_year),
-                    tuple(census_fields),
-                    bool(include_proxy),
-                )
-                st.session_state["api_source_candidates"]["census"] = census
-                st.session_state["api_source_reports"]["census"] = census
-                fetched.append(f"{len(census)} Census")
-            except CensusApiError as exc:
-                _show_api_fetch_error("Census ACS", exc)
-            try:
-                bea = _cached_bea_source_candidates(
-                    str(bea_state),
-                    str(bea_county),
-                    int(bea_year),
-                    int(bea_prior),
-                    tuple(bea_fields),
-                )
-                st.session_state["api_source_candidates"]["bea"] = bea
-                st.session_state["api_source_reports"]["bea"] = bea
-                fetched.append(f"{len(bea)} BEA")
-            except BeaApiError as exc:
-                _show_api_fetch_error("BEA", exc)
+            if census_key_available:
+                try:
+                    census = _cached_census_source_candidates(
+                        str(state_fips),
+                        str(county_fips),
+                        int(census_year),
+                        tuple(census_fields),
+                        bool(include_proxy),
+                    )
+                    st.session_state["api_source_candidates"]["census"] = census
+                    st.session_state["api_source_reports"]["census"] = census
+                    fetched.append(f"{len(census)} Census")
+                except CensusApiError as exc:
+                    _show_api_fetch_error("Census ACS", exc)
+            if bea_key_available:
+                try:
+                    bea = _cached_bea_source_candidates(
+                        str(bea_state),
+                        str(bea_county),
+                        int(bea_year),
+                        int(bea_prior),
+                        tuple(bea_fields),
+                    )
+                    st.session_state["api_source_candidates"]["bea"] = bea
+                    st.session_state["api_source_reports"]["bea"] = bea
+                    fetched.append(f"{len(bea)} BEA")
+                except BeaApiError as exc:
+                    _show_api_fetch_error("BEA", exc)
             if fetched:
                 st.success(f"Fetched {' and '.join(fetched)} candidate fields.")
 

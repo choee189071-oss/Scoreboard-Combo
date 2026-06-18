@@ -228,8 +228,9 @@ def fetch_acs5_county_fields(
         "in": f"state:{state_fips.zfill(2)}",
     }
     key = get_census_api_key(api_key)
-    if key:
-        params["key"] = key
+    if not key:
+        raise CensusApiError("CENSUS_API_KEY is not configured.")
+    params["key"] = key
 
     dataset = DEFAULT_ACS5_DATASET
     url = f"{CENSUS_API_BASE_URL}/{int(year)}/{dataset}?{urlencode(params)}"
@@ -264,8 +265,9 @@ def fetch_acs5_us_fields(
         "for": "us:*",
     }
     key = get_census_api_key(api_key)
-    if key:
-        params["key"] = key
+    if not key:
+        raise CensusApiError("CENSUS_API_KEY is not configured.")
+    params["key"] = key
 
     dataset = DEFAULT_ACS5_DATASET
     url = f"{CENSUS_API_BASE_URL}/{int(year)}/{dataset}?{urlencode(params)}"
