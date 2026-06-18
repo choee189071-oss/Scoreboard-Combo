@@ -1104,6 +1104,12 @@ def render_source_workflow(methodology_id: str) -> None:
         status_cols[1].metric("ACS Source Year", defaults["census_year"])
         status_cols[2].metric("BEA Current", defaults["bea_year"])
         status_cols[3].metric("BEA Prior", defaults["bea_prior"])
+        st.info(
+            "Why 2024? The rating/scorecard year can be 2026, but public Census ACS and BEA county-level API data "
+            "lag the analysis year. This panel uses the latest supported public source vintage as API evidence; "
+            "newer issuer-specific values can still be entered in the issuer_data table from CreditScope, ACFR, OS, "
+            "DebtReport, or manual confirmation."
+        )
         if st.button("Use recommended API defaults", key="api_use_recommended_defaults"):
             _set_recommended_api_widget_defaults(defaults, force=True)
             st.rerun()
