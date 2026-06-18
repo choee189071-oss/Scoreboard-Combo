@@ -797,7 +797,8 @@ def _render_manual_raw_gap_form(missing: pd.DataFrame, methodology_id: str) -> N
         st.markdown("**Manual raw value entry**")
         st.caption(
             "Use this only when the analyst has confirmed the value from ACFR/OS/CreditScope support or a policy assumption. "
-            "Saved manual values become Manual source candidates and flow into issuer_data."
+            "Saved manual values become Manual source candidates and flow into issuer_data. Scalar manual entries resolve "
+            "source gaps; exact avg_3yr replication may still require three-year source series."
         )
         manual_inputs = st.data_editor(
             _manual_raw_gap_input_frame(missing),
