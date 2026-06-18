@@ -17,8 +17,8 @@ county_gdp,default,BEA|CreditScope|Manual,0.85,true,Raw county GDP or gross coun
 county_gdp_current,default,BEA|CreditScope|Manual,0.85,true,Current-period raw county GDP.
 county_gdp_prior,default,BEA|CreditScope|Manual,0.85,true,Prior-period raw county GDP.
 county_population,default,CensusACS|BEA|Manual,0.85,true,County-level population denominator for GDP and personal-income per-capita formulas.
-debt,default,CreditScope|OS|ACFR|Manual,0.80,true,Raw total debt.
-debt_service,default,CreditScope|OS|ACFR|Manual,0.80,true,Raw annual debt service.
+debt,default,CreditScope|DebtReport|OS|ACFR|Manual,0.80,true,Raw total debt.
+debt_service,default,CreditScope|DebtReport|OS|ACFR|Manual,0.80,true,Raw annual debt service.
 enrollment_3yr_prior,default,IPEDS_Excel|CreditScope|AnnualReport|Manual,0.80,true,Enrollment three years prior.
 enrollment_current,default,IPEDS_Excel|CreditScope|AnnualReport|Manual,0.80,true,Current enrollment.
 fte_enrollment,default,IPEDS_Excel|CreditScope|AnnualReport|Manual,0.80,true,Full-time equivalent enrollment.
@@ -30,8 +30,8 @@ governmental_expense,default,CreditScope|ACFR|Manual,0.80,true,Raw governmental 
 governmental_revenue,default,CreditScope|ACFR|Manual,0.80,true,Raw governmental revenue.
 issuer_mfi,default,CensusACS|CreditScope|Manual,0.80,true,Issuer-area median family income.
 issuer_population,default,CreditScope|OS|ACFR|Manual,0.80,true,Issuer or service-area population denominator for debt and pension per-capita formulas; confirm geography before using a county proxy.
-long_term_debt,default,CreditScope|OS|ACFR|Manual,0.80,true,Raw long-term debt.
-mads,default,OS|CreditScope|ACFR|Manual,0.75,true,Maximum annual debt service usually comes from OS/debt schedule.
+long_term_debt,default,CreditScope|DebtReport|OS|ACFR|Manual,0.80,true,Raw long-term debt.
+mads,default,DebtReport|OS|CreditScope|ACFR|Manual,0.75,true,Maximum annual debt service usually comes from OS/debt schedule.
 median_household_ebi,default,CensusACS|BEA|OS|Manual,0.80,true,Raw median household income/EBI denominator for utility affordability.
 mhi_adjusted_rpp,default,CensusACS|BEA|Manual,0.80,true,Median household income adjusted by regional price parity.
 net_assets,default,CreditScope|ACFR|Manual,0.80,true,Raw net assets/net position.

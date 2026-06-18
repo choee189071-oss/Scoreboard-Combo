@@ -16,6 +16,7 @@ issuer_mfi,Economy,CensusACS,Manual,API,Raw issuer-area median family income
 us_mfi,Economy,CensusACS,Manual,API,Raw U.S. median family income
 median_household_ebi,Economy,CensusACS,Manual,API,Raw median household income or EBI proxy
 population,Demographics,CensusACS,CreditScope,API,Raw population
+population_current,Demographics,CensusACS,Manual,API,Raw current-period population
 tax_base_population,Demographics,CensusACS,CreditScope|Manual,API,Raw population denominator for tax-base per-capita formulas; keep separate from generic resident population when methodology geography differs
 population_prior,Demographics,CensusACS,Manual,API,Raw prior-period population
 population_us,Demographics,CensusACS|BEA,Manual,API,Raw U.S. population
@@ -26,8 +27,10 @@ enrollment_current,Enrollment,IPEDS_Excel,CreditScope|AnnualReport,Upload,Raw cu
 enrollment_3yr_prior,Enrollment,IPEDS_Excel,CreditScope|AnnualReport,Upload,Raw enrollment three years prior
 full_value,TaxBase,CreditScope,CountyAssessor|OS,Upload,Raw full valuation or full value
 assessed_value,TaxBase,CreditScope,CountyAssessor|OS,Upload,Raw assessed value
+assessed_value_current,TaxBase,CreditScope,CountyAssessor|OS,Upload,Raw current-period assessed value
 assessed_value_prior,TaxBase,CreditScope,CountyAssessor|OS,Upload,Raw prior-period assessed value
 annual_utility_bill,Utility,OS,RateStudy|Manual,Document,Raw annual residential utility bill
+adjusted_operating_revenue,Financial,CreditScope,ACFR,Upload,Raw adjusted operating revenue denominator
 operating_revenue,Financial,CreditScope,ACFR,Upload,Raw operating revenue
 operating_expense,Financial,CreditScope,ACFR,Upload,Raw operating expense
 governmental_revenue,Financial,CreditScope,ACFR,Upload,Raw governmental revenue
@@ -39,8 +42,12 @@ committed_fund_balance,Financial,CreditScope|ACFR,Manual,Upload,Raw committed fu
 assigned_fund_balance,Financial,CreditScope|ACFR,Manual,Upload,Raw assigned fund balance
 unassigned_fund_balance,Financial,CreditScope|ACFR,Manual,Upload,Raw unassigned fund balance
 fund_balance,Financial,CreditScope,ACFR,Upload,Raw total fund balance
+fund_balance_ratio_current,Financial,MoodysWorkbook,CreditScope|ACFR|Manual,Document,Current-year fund balance ratio retained as source-specific trend input until multi-year raw history is normalized
+fund_balance_ratio_5yr_prior,Financial,MoodysWorkbook,CreditScope|ACFR|Manual,Document,Five-year prior fund balance ratio retained as source-specific trend input until multi-year raw history is normalized
 cash,Financial,CreditScope,ACFR,Upload,Raw cash
 cash_and_investments,Financial,CreditScope,ACFR,Upload,Raw cash and investments
+cash_ratio_current,Financial,MoodysWorkbook,CreditScope|ACFR|Manual,Document,Current-year cash ratio retained as source-specific trend input until multi-year raw history is normalized
+cash_ratio_5yr_prior,Financial,MoodysWorkbook,CreditScope|ACFR|Manual,Document,Five-year prior cash ratio retained as source-specific trend input until multi-year raw history is normalized
 net_assets,Financial,CreditScope,ACFR,Upload,Raw net assets or net position
 revenue,Financial,CreditScope,ACFR,Upload,Raw total revenue
 debt,Debt,CreditScope,OS|ACFR,Upload,Raw total debt

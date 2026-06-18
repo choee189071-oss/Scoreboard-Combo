@@ -38,3 +38,23 @@ annual_utility_bill,OS,"Annual Utility Bill|Typical Annual Bill|Average Annual R
 adjusted_npl,MoodysWorkbook,"Adjusted NPL|Adjusted Net Pension Liability|Moody's Adjusted NPL",fuzzy,Raw adjusted NPL
 adjusted_opeb,MoodysWorkbook,"Adjusted OPEB|Adjusted OPEB Liability|Moody's Adjusted OPEB",fuzzy,Raw adjusted OPEB
 manual_score,Manual,"Manual Score|Analyst Score|Override Score|Qualitative Score",manual,Manual input only
+assessed_value_current,CreditScope,"Current Assessed Value|Current AV|Assessed Value Current|Taxable Assessed Value Current|Total Assessed Value Current",fuzzy,Raw current assessed value
+cash_ratio_current,MoodysWorkbook,"Cash Ratio Current|Current Cash Balance Ratio|Current Cash Ratio|Cash Balance Ratio Current",fuzzy,Moody's source-specific current cash ratio trend input
+cash_ratio_5yr_prior,MoodysWorkbook,"Cash Ratio 5 Years Prior|Cash Ratio 5yr Prior|Prior Cash Balance Ratio|Five-Year Prior Cash Ratio",fuzzy,Moody's source-specific prior cash ratio trend input
+county_gdp,BEA,"County GDP|Gross County Product|GCP|County Gross Domestic Product|Regional GDP",fuzzy,Raw county GDP
+fund_balance_ratio_current,MoodysWorkbook,"Fund Balance Ratio Current|Current Fund Balance Ratio|Available Fund Balance Ratio Current",fuzzy,Moody's source-specific current fund balance ratio trend input
+fund_balance_ratio_5yr_prior,MoodysWorkbook,"Fund Balance Ratio 5 Years Prior|Fund Balance Ratio 5yr Prior|Prior Fund Balance Ratio|Five-Year Prior Fund Balance Ratio",fuzzy,Moody's source-specific prior fund balance ratio trend input
+issuer_mfi,CensusACS,"Issuer MFI|Median Family Income|Area Median Family Income|Issuer Median Family Income",fuzzy,Raw issuer-area median family income
+median_household_ebi,CensusACS,"Median Household EBI|Median Household Effective Buying Income|Median Household Income|MHI",fuzzy,Raw local household income or EBI proxy
+operating_transfers,CreditScope,"Operating Transfers|Net Operating Transfers|Transfers In Out|Transfers In (Out)|Other Financing Sources Uses",fuzzy,Signed operating transfer amount
+personal_income,BEA,"Personal Income|Local Personal Income|County Personal Income|Aggregate Personal Income",fuzzy,Raw local personal income
+population_current,CensusACS,"Current Population|Population Current|Current Resident Population|Current Service Area Population",fuzzy,Raw current-period population
+population_prior,CensusACS,"Prior Population|Population Prior|Previous Population|Prior Resident Population|Prior Service Area Population",fuzzy,Raw prior-period population
+poverty_rate,CensusACS,"Poverty Rate|Population Below Poverty|Percent Below Poverty|Below Poverty Rate",fuzzy,Raw poverty rate
+reserve_revenue,CreditScope,"Reserve Revenue|Revenue Denominator|Reserve Ratio Revenue|Governmental Revenue for Reserves",fuzzy,Raw revenue denominator used for reserves
+us_gdp,BEA,"US GDP|U.S. GDP|United States GDP|US Gross Domestic Product|U.S. Gross Domestic Product",fuzzy,Raw U.S. GDP
+debt,DebtReport,"Total Debt|Debt Outstanding|Bonded Indebtedness|Issue Amount|Outstanding Principal",fuzzy,Raw total debt from standalone debt reports
+long_term_debt,DebtReport,"Long-Term Debt|Long Term Debt|Outstanding Long-Term Debt|Remaining Principal",fuzzy,Raw long-term debt from standalone debt reports
+net_direct_debt,DebtReport,"Net Direct Debt|Direct Debt|Bonded Indebtedness|Total Bonded Indebtedness|Outstanding Bonded Debt",fuzzy,Raw net direct debt from standalone debt reports
+debt_service,DebtReport,"Debt Service|Combined Debt Service|Annual Debt Service|Principal and Interest|Total Debt Service",fuzzy,Raw annual debt service from standalone debt reports
+mads,DebtReport,"MADS|Maximum Annual Debt Service|Max Annual Debt Service|Maximum Debt Service|Peak Debt Service",fuzzy,Raw maximum annual debt service from standalone debt reports

@@ -45,7 +45,7 @@ SOURCE_SESSION_KEYS = {
     "workbook_direct_metric_debug",
 }
 
-SOURCE_WORKFLOW_CACHE_VERSION = "creditscope-main-sheet-v1"
+SOURCE_WORKFLOW_CACHE_VERSION = "creditscope-single-sheet-v2"
 
 
 SOURCE_WORKFLOW_GUIDE: list[dict[str, str]] = [
@@ -95,6 +95,16 @@ def _upload_buffer(file_name: str, payload: bytes) -> io.BytesIO:
     buffer = io.BytesIO(payload)
     buffer.name = file_name
     return buffer
+
+
+def _show_api_fetch_error(source_label: str, exc: Exception) -> None:
+    message = str(exc).strip() or "No detail returned."
+    st.warning(f"{source_label} candidate data is unavailable for the selected inputs.")
+    st.caption(f"{type(exc).__name__}: {message}")
+    if source_label == "Census ACS":
+        st.caption("Try a published ACS year, confirm state/county FIPS, or use manual/source confirmation for this run.")
+    elif source_label == "BEA":
+        st.caption("Confirm the BEA API key, year, and county FIPS. You can continue without BEA candidates and fill economy fields later.")
 
 
 @st.cache_data(show_spinner=False)
@@ -261,6 +271,8 @@ def _is_generic_raw_sheet(sheet_name: str) -> bool:
 
 def _auto_sheet(sheet_names: Iterable[str], uploaded_name: str) -> str | None:
     sheet_names = list(sheet_names)
+    if len(sheet_names) == 1:
+        return sheet_names[0]
     upload_tokens = _tokens(uploaded_name)
     ranked: list[tuple[int, int, int, str]] = []
     for idx, sheet in enumerate(sheet_names):
@@ -591,6 +603,40 @@ def _run_formulas_after_source_save(methodology_id: str, issuer_data: dict[str, 
     return formula_results
 
 
+def _source_guided_progress() -> pd.DataFrame:
+    uploads = st.session_state.get("uploaded_sources", {}) or {}
+    issuer_data = st.session_state.get("issuer_data", {}) or {}
+    approved = st.session_state.get("approved_source_candidates")
+    approved_count = len(approved) if isinstance(approved, pd.DataFrame) else 0
+    rows = [
+        {
+            "step": "1",
+            "task": "Upload CreditScope financial workbook",
+            "status": "Done" if uploads.get("creditscope") else "Next",
+            "what_to_do": "Put Financials_ West Sacramento.xlsx in CreditScope raw workbook.",
+        },
+        {
+            "step": "2",
+            "task": "Upload ACFR and debt support PDFs",
+            "status": "Done" if uploads.get("acfr") or uploads.get("debt_report") else "After CreditScope",
+            "what_to_do": "Put ACFR PDFs in ACFR; put debt schedules in Debt service / bonded indebtedness report.",
+        },
+        {
+            "step": "3",
+            "task": "Save issuer_data",
+            "status": "Done" if issuer_data else "After uploads",
+            "what_to_do": "Click Save uploaded data as issuer_data. This does not approve PDF values yet.",
+        },
+        {
+            "step": "4",
+            "task": "Confirm pending source values",
+            "status": "In progress" if approved_count else "Later",
+            "what_to_do": "Open Source Confirmation Queue and accept/edit only values you trust.",
+        },
+    ]
+    return pd.DataFrame(rows)
+
+
 def render_source_workflow(methodology_id: str) -> None:
     if st.session_state.get("source_methodology_id") != methodology_id:
         st.session_state["api_source_candidates"] = {}
@@ -616,22 +662,40 @@ def render_source_workflow(methodology_id: str) -> None:
     if notice:
         st.success(notice)
 
-    top_cols = st.columns([1, 3])
+    top_cols = st.columns([1, 1, 2])
     with top_cols[0]:
         if st.button("Reset source session"):
             _reset_source_session(methodology_id)
             st.rerun()
     with top_cols[1]:
+        guided_mode = st.checkbox(
+            "Guided mode",
+            value=bool(st.session_state.get("guided_source_mode", True)),
+            key="guided_source_mode",
+            help="Recommended while we pilot one issuer. Advanced API/manual tools stay available but collapsed.",
+        )
+    with top_cols[2]:
         st.caption("Reset only when changing issuer, methodology, or source workbook. Saved uploads stay in session until reset.")
+
+    if guided_mode:
+        st.info(
+            "For this pilot: upload the CreditScope workbook, upload ACFR/debt PDFs, save issuer_data, then use the confirmation queue. "
+            "Skip Census/BEA for now unless you specifically want to test API candidates."
+        )
+        st.dataframe(clean_for_display(_source_guided_progress()), width="stretch", hide_index=True)
 
     with st.expander("What each Source Data section does", expanded=False):
         st.dataframe(clean_for_display(pd.DataFrame(SOURCE_WORKFLOW_GUIDE)), width="stretch", hide_index=True)
 
     with st.container(border=True):
-        st.markdown("**Source uploads**")
+        st.markdown("**Step 1. Upload the files we have**" if guided_mode else "**Source uploads**")
         st.caption(
-            "Upload source files for the Rating Path and Evidence Path. CreditScope workbooks can feed issuer_data; "
-            "ACFR/OS PDFs are registered as evidence and will not change formula inputs until approved and applied."
+            "Start here. CreditScope can feed issuer_data; ACFR and debt PDFs are evidence until you approve specific values."
+            if guided_mode
+            else (
+                "Upload source files for the Rating Path and Evidence Path. CreditScope workbooks can feed issuer_data; "
+                "ACFR/OS PDFs are registered as evidence and will not change formula inputs until approved and applied."
+            )
         )
         saved_uploads = _uploaded_sources_summary()
         if not saved_uploads.empty:
@@ -641,9 +705,9 @@ def render_source_workflow(methodology_id: str) -> None:
             {
                 "key": "creditscope",
                 "source_name": "CreditScope",
-                "label": "CreditScope raw workbook",
+                "label": "CreditScope financial workbook",
                 "types": ["csv", "xlsx", "xls"],
-                "caption": "CSV/XLSX/XLS up to 200MB per file.",
+                "caption": "Required for this case. Upload Financials_ West Sacramento.xlsx here.",
                 "multiple": False,
             },
             {
@@ -663,14 +727,28 @@ def render_source_workflow(methodology_id: str) -> None:
                 "multiple": True,
             },
             {
+                "key": "debt_report",
+                "source_name": "DebtReport",
+                "label": "Debt service / bonded indebtedness report",
+                "types": ["pdf", "csv", "xlsx", "xls"],
+                "caption": "Use this when no OS is available. Put CombinedDebtService / RemainingDebtService / BondedIndebtedness here.",
+                "multiple": True,
+            },
+            {
                 "key": "acfr",
                 "source_name": "ACFR",
-                "label": "ACFR / Audit extract",
+                "label": "ACFR / audited financial statements",
                 "types": ["pdf", "csv", "xlsx", "xls"],
-                "caption": "Upload one or more PDF/CSV/XLSX/XLS files. ACFR PDFs are evidence support until approved in Data Confirmation.",
+                "caption": "Upload ACFR PDFs here. They become evidence candidates, not automatic formula inputs.",
                 "multiple": True,
             },
         ]
+        if guided_mode:
+            source_options = [
+                option
+                for option in source_options
+                if option["key"] in {"creditscope", "acfr", "debt_report"}
+            ]
         for row_start in range(0, len(source_options), 2):
             cols = st.columns(2)
             for col, option in zip(cols, source_options[row_start : row_start + 2]):
@@ -687,7 +765,7 @@ def render_source_workflow(methodology_id: str) -> None:
                     )
                     st.caption(option["caption"])
                     include_support_tabs = False
-                    if source_name == "CreditScope":
+                    if source_name == "CreditScope" and not guided_mode:
                         include_support_tabs = st.checkbox(
                             "Include workbook support tabs as advanced supplemental source",
                             value=False,
@@ -719,9 +797,9 @@ def render_source_workflow(methodology_id: str) -> None:
                                 sheet_names = _cached_excel_sheet_names(file_name, payload)
                                 selected_sheet = _auto_sheet(sheet_names, file_name)
                                 if sheet_names and selected_sheet is None:
-                                    st.error(
-                                        "No matching CreditScope raw worksheet found. Use this workbook for validation only, "
-                                        "or upload a raw workbook whose FIN/raw sheet matches the issuer."
+                                    st.warning(
+                                        "This does not look like a CreditScope raw workbook. If it is a debt/support workbook, "
+                                        "upload it in Debt service / bonded indebtedness report instead."
                                     )
                                     st.caption(f"Detected worksheets: {', '.join(sheet_names)}")
                                     continue
@@ -784,16 +862,28 @@ def render_source_workflow(methodology_id: str) -> None:
                 st.caption("This shows what each upload could and could not map. It is not the final source readiness list.")
                 st.dataframe(clean_for_display(pd.concat(upload_reports, ignore_index=True)), width="stretch", hide_index=True)
 
-    with st.container(border=True):
+    api_container = st.expander("Optional: Census / BEA API candidates", expanded=not guided_mode)
+    with api_container:
         st.markdown("**API candidates**")
-        st.caption("Census and BEA fields are always fetched as a full supported set to avoid slow select/unselect loops.")
+        st.caption(
+            "Census and BEA fields are fetched as source candidates only. External releases lag analysis years, "
+            "so the default API year is the latest conservative published year used by this app."
+        )
+        issuer_name = str(st.session_state.get("issuer_name", "") or "").lower()
+        default_state_fips = str(st.session_state.get("state_fips", "") or "06").zfill(2)
+        default_county_fips = str(
+            st.session_state.get("county_fips", "")
+            or ("113" if "west sacramento" in issuer_name else "013")
+        ).zfill(3)
         c1, c2 = st.columns(2)
         with c1:
             st.write("Census ACS")
             census_cols = st.columns(3)
-            census_year = census_cols[0].number_input("ACS year", min_value=2009, max_value=2026, value=2024, step=1)
-            state_fips = census_cols[1].text_input("State FIPS", value="06", max_chars=2)
-            county_fips = census_cols[2].text_input("County FIPS", value="013", max_chars=3)
+            census_year = census_cols[0].number_input("ACS year", min_value=2009, max_value=2024, value=2024, step=1)
+            state_fips = census_cols[1].text_input("State FIPS", value=default_state_fips, max_chars=2)
+            county_fips = census_cols[2].text_input("County FIPS", value=default_county_fips, max_chars=3)
+            st.session_state["state_fips"] = str(state_fips).zfill(2)
+            st.session_state["county_fips"] = str(county_fips).zfill(3)
             include_proxy = st.checkbox("Include proxy fields", value=False)
             census_fields = supported_census_candidate_fields(include_proxy_fields=include_proxy)
             st.caption(f"{len(census_fields)} Census fields selected automatically.")
@@ -810,13 +900,12 @@ def render_source_workflow(methodology_id: str) -> None:
                     st.session_state["api_source_reports"]["census"] = census
                     st.success(f"Fetched {len(census)} Census candidate fields.")
                 except CensusApiError as exc:
-                    st.error("Could not fetch Census ACS data.")
-                    st.exception(exc)
+                    _show_api_fetch_error("Census ACS", exc)
         with c2:
             st.write("BEA Regional")
             bea_cols = st.columns(4)
-            bea_year = bea_cols[0].number_input("BEA year", min_value=2001, max_value=2026, value=2024, step=1)
-            bea_prior = bea_cols[1].number_input("BEA prior", min_value=2000, max_value=2025, value=2023, step=1)
+            bea_year = bea_cols[0].number_input("BEA year", min_value=2001, max_value=2024, value=2024, step=1)
+            bea_prior = bea_cols[1].number_input("BEA prior", min_value=2000, max_value=2023, value=2023, step=1)
             bea_state = bea_cols[2].text_input("BEA State", value=state_fips or "06", max_chars=2)
             bea_county = bea_cols[3].text_input("BEA County", value=county_fips or "013", max_chars=3)
             bea_fields = supported_bea_candidate_fields()
@@ -834,8 +923,7 @@ def render_source_workflow(methodology_id: str) -> None:
                     st.session_state["api_source_reports"]["bea"] = bea
                     st.success(f"Fetched {len(bea)} BEA candidate fields.")
                 except BeaApiError as exc:
-                    st.error("Could not fetch BEA data.")
-                    st.exception(exc)
+                    _show_api_fetch_error("BEA", exc)
         if st.button("Fetch Census + BEA", key="api_fetch_all", type="primary"):
             fetched: list[str] = []
             try:
@@ -850,8 +938,7 @@ def render_source_workflow(methodology_id: str) -> None:
                 st.session_state["api_source_reports"]["census"] = census
                 fetched.append(f"{len(census)} Census")
             except CensusApiError as exc:
-                st.error("Could not fetch Census ACS data.")
-                st.exception(exc)
+                _show_api_fetch_error("Census ACS", exc)
             try:
                 bea = _cached_bea_source_candidates(
                     str(bea_state),
@@ -864,14 +951,18 @@ def render_source_workflow(methodology_id: str) -> None:
                 st.session_state["api_source_reports"]["bea"] = bea
                 fetched.append(f"{len(bea)} BEA")
             except BeaApiError as exc:
-                st.error("Could not fetch BEA data.")
-                st.exception(exc)
+                _show_api_fetch_error("BEA", exc)
             if fetched:
                 st.success(f"Fetched {' and '.join(fetched)} candidate fields.")
 
-    with st.container(border=True):
-        st.markdown("**Manual / source-pending inputs**")
-        st.caption("Only typed values are saved. Blank cells do not overwrite uploaded or API source data.")
+    manual_container = st.expander("Step 2. Save uploaded data and fill only truly missing values", expanded=True)
+    with manual_container:
+        st.markdown("**Save issuer_data**" if guided_mode else "**Manual / source-pending inputs**")
+        st.caption(
+            "Usually you can leave the table blank. Click Save uploaded data as issuer_data after uploads."
+            if guided_mode
+            else "Only typed values are saved. Blank cells do not overwrite uploaded or API source data."
+        )
         manual_base = _manual_fields(required_df, st.session_state.get("source_report"))
         with st.form(f"manual_source_form_{methodology_id}"):
             if manual_base.empty:
@@ -892,7 +983,10 @@ def render_source_workflow(methodology_id: str) -> None:
                     },
                 )
             button_cols = st.columns(2)
-            save_sources = button_cols[0].form_submit_button("Save issuer_data", type="primary")
+            save_sources = button_cols[0].form_submit_button(
+                "Save uploaded data as issuer_data" if guided_mode else "Save issuer_data",
+                type="primary",
+            )
             save_and_run = button_cols[1].form_submit_button("Save issuer_data and run formulas")
 
         if save_sources or save_and_run:

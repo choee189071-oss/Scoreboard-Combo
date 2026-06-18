@@ -80,7 +80,6 @@ from utils.ui_helpers import (
 
 st.set_page_config(page_title="Scoreboard Combo", layout="wide")
 init_state()
-st.sidebar.caption("Build: direct-metrics-cache-v3")
 
 DOWNSTREAM_STATE_KEYS = [
     "issuer_data",
@@ -286,6 +285,19 @@ issuer_data = st.session_state.get("issuer_data", {}) or {}
 with st.container(border=True):
     st.markdown("**0. Deal Setup**")
     st.caption("Choose the rating methodology, issuer, and fiscal year before sourcing data.")
+    preset_cols = st.columns([1, 2])
+    if preset_cols[0].button("Load West Sacramento pilot settings"):
+        st.session_state["methodology_id"] = "sp_local_gov_k12"
+        st.session_state["issuer_name"] = "City of West Sacramento"
+        st.session_state["analysis_year"] = "2026"
+        st.session_state["analysis_years_included"] = ["Current", "1Y prior", "2Y prior", "3Y prior"]
+        st.session_state["state_fips"] = "06"
+        st.session_state["county_fips"] = "113"
+        st.session_state["guided_source_mode"] = True
+        clear_downstream_state()
+        st.session_state["setup_saved_notice"] = "West Sacramento pilot settings loaded. Source/formula/rating outputs were reset for a clean run."
+        st.rerun()
+    preset_cols[1].caption("Recommended while we finish the pilot. It sets S&P Local Gov/K-12, 2026, CA/Yolo County.")
     method_ids = list(SCHEME_OPTIONS.keys())
     with st.form("deal_setup_form"):
         setup_cols = st.columns([1.2, 1.2, 0.8])

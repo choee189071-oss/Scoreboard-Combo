@@ -1,4 +1,7 @@
 .streamlit/secrets.toml
+node_modules
+node_modules/
+work/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

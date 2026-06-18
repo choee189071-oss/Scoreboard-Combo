@@ -19,6 +19,7 @@ from engine.acfr_extraction_engine import (
 )
 from engine.data_sourcing_engine import normalize_source_candidates, required_fields_for_methodology
 from engine.factor_engine import load_factor_template
+from utils.source_confirmation_queue import render_source_confirmation_queue
 from utils.manual_scores import manual_score_candidates
 from utils.ui_helpers import clean_for_display, selected_source_report
 
@@ -601,7 +602,7 @@ def _classify_file(source_slot: str, file_name: str, issuer_name: str) -> dict[s
         doc_type = "CreditScope workbook"
     elif source_slot == "acfr" or "acfr" in lower or "annual comprehensive financial report" in lower:
         doc_type = "ACFR"
-    elif source_slot == "os":
+    elif source_slot in {"os", "debt_report"}:
         doc_type = "Debt support / official statement"
     elif source_slot == "ipeds":
         doc_type = "IPEDS"
@@ -3418,10 +3419,25 @@ def _render_human_workflow_cards() -> None:
         with st.expander("Evidence locator map", expanded=False):
             _render_step_3_source_map(registry)
 
-        st.markdown("**A2. Data completeness and blocking fields**")
+        st.markdown("**A2. Source confirmation queue**")
+        render_source_confirmation_queue(
+            methodology_id=methodology_id,
+            source_report_key="source_report",
+            source_candidates_key="source_candidates",
+            pdf_evidence_key="source_intake_pdf_evidence",
+            approved_candidates_key="approved_source_candidates",
+            issuer_data_key="issuer_data",
+            source_readiness_key="source_readiness_summary",
+            source_candidates_output_key="source_candidates",
+            decision_state_key="workflow_source_confirmation_decisions",
+            recalculate_formulas=True,
+            show_header=False,
+        )
+
+        st.markdown("**A3. Data completeness and blocking fields**")
         _render_data_completeness_review(methodology_id)
 
-        st.markdown("**A3. Formula checkpoint**")
+        st.markdown("**A4. Formula checkpoint**")
         _render_metric_calculation_checkpoint()
 
     with st.expander("B. Evidence Path - optional ACFR/API/OS validation", expanded=False):

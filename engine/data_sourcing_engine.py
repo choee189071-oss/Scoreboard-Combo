@@ -47,6 +47,10 @@ MISSING_STATUSES = {
     "not_found",
     "model_missing",
 }
+MODEL_INPUT_READY_STATUSES = {
+    "independent_ready",
+    "manual_input",
+}
 
 DIRECT_METRIC_SOURCE_FIELDS = {
     "fixed_cost_burden_ratio",
@@ -581,9 +585,14 @@ def select_issuer_sources(
     if out.empty:
         return pd.DataFrame()
     out = out.drop(columns=[col for col in ["_rank_score", "_confidence_sort"] if col in out.columns])
+    out["model_input_eligible"] = (
+        out.get("selected", False).astype(bool)
+        & out.get("readiness_status", "").astype(str).isin(MODEL_INPUT_READY_STATUSES)
+    )
     preferred = [
         "field_name",
         "selected",
+        "model_input_eligible",
         "readiness_status",
         "source_quality_status",
         "value",
@@ -607,7 +616,7 @@ def select_issuer_sources(
 
 
 def issuer_data_from_source_report(source_report: pd.DataFrame) -> Dict[str, Any]:
-    """Build issuer_data from selected non-missing source report rows."""
+    """Build issuer_data from selected rows that are safe to feed into formulas."""
     issuer_data: Dict[str, Any] = {}
     if source_report is None or source_report.empty:
         return issuer_data
@@ -616,6 +625,8 @@ def issuer_data_from_source_report(source_report: pd.DataFrame) -> Dict[str, Any
         field = _normalize_field(row.get("field_name", ""))
         value = row.get("value")
         if not field or _is_missing_value(value):
+            continue
+        if str(row.get("readiness_status", "") or "") not in MODEL_INPUT_READY_STATUSES:
             continue
         issuer_data[field] = value
     return issuer_data
