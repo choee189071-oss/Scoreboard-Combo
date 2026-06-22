@@ -61,7 +61,7 @@ except ImportError:
         metrics = rating_readiness_metrics(methodology_id)
         st.info(metrics.get("next_action", "Open Data Confirmation for details."))
         return metrics
-from utils.manual_scores import manual_score_candidates, render_manual_score_editor
+from utils.manual_scores import manual_score_candidates
 from utils.source_workflow import (
     _direct_metric_debug_frame,
     _workbook_direct_metric_overrides,
@@ -268,35 +268,6 @@ def _missing_manual_score_ids(methodology_id: str, template: pd.DataFrame) -> li
     return missing
 
 
-def render_manual_rating_inputs(methodology_id: str, formula_results: pd.DataFrame | None) -> None:
-    try:
-        template = load_factor_template(methodology_id, templates_dir="templates")
-    except Exception as exc:
-        st.warning(f"Could not load manual rating input template: {exc}")
-        return
-    candidates = manual_score_candidates(methodology_id, template)
-    if candidates.empty:
-        return
-
-    st.markdown("**Manual rating inputs**")
-    st.caption(
-        "These are analyst-scored rating inputs, not raw financial source fields. "
-        "Enter them here so the scoreboard can run after formulas are ready."
-    )
-    render_manual_score_editor(
-        methodology_id,
-        template,
-        formula_results,
-        key_prefix="source_manual",
-        show_heading=False,
-    )
-    missing_manual = _missing_manual_score_ids(methodology_id, template)
-    if missing_manual:
-        st.info(f"Manual rating input(s) still needed before the final scoreboard: {', '.join(missing_manual)}")
-    else:
-        st.success("Manual rating inputs are saved in this session.")
-
-
 page_header(
     "Workflow",
     "A focused workspace for sourcing raw issuer data, calculating methodology formulas, and producing an indicative rating.",
@@ -402,10 +373,6 @@ issuer_data = st.session_state.get("issuer_data", {}) or {}
 with st.container(border=True):
     st.markdown("**1. Source Data**")
     render_source_workflow(methodology_id)
-    current_formula_results = st.session_state.get("methodology_formula_results")
-    if not isinstance(current_formula_results, pd.DataFrame) or current_formula_results.empty:
-        current_formula_results = st.session_state.get("formula_results")
-    render_manual_rating_inputs(methodology_id, current_formula_results)
 
 render_rating_readiness_overview(methodology_id, expanded=False)
 

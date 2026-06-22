@@ -27,6 +27,7 @@ from engine.data_sourcing_engine import (
 )
 from engine.factor_engine import load_factor_template
 from engine.mapping_engine import map_uploaded_file
+from utils.manual_scores import manual_score_candidates
 from utils.ui_helpers import clean_for_display, selected_source_report, source_readiness_counts
 
 
@@ -627,6 +628,43 @@ def _source_label_from_row(row: pd.Series) -> str:
     return ": ".join(part for part in parts if part)
 
 
+def _manual_score_editor_value(score: Any) -> Any:
+    if isinstance(score, dict):
+        return score.get("numeric_score")
+    return score
+
+
+def _manual_rating_input_rows(methodology_id: str) -> pd.DataFrame:
+    try:
+        template = load_factor_template(methodology_id, templates_dir="templates")
+    except Exception:
+        return pd.DataFrame()
+    candidates = manual_score_candidates(methodology_id, template)
+    if candidates.empty:
+        return pd.DataFrame()
+
+    stored = st.session_state.get("manual_scores", {}) or {}
+    rows: list[dict[str, Any]] = []
+    for _, row in candidates.iterrows():
+        field = str(row.get("formula_id", "") or "").strip()
+        if not field:
+            continue
+        value = _manual_score_editor_value(stored.get(field))
+        has_value = _clean_input_value(value) is not None
+        rows.append(
+            {
+                "field_name": field,
+                "value": _editor_text_value(value),
+                "source_status": "manual_input" if has_value else "missing",
+                "source_used": "Manual rating input",
+                "used_by": "scoreboard",
+                "category": row.get("factor") or row.get("section") or "ManualRating",
+                "input_type": "manual_rating_input",
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def _build_issuer_data_editor(
     *,
     methodology_id: str,
@@ -690,13 +728,21 @@ def _build_issuer_data_editor(
                 "source_used": source_used,
                 "used_by": row.get("used_by", ""),
                 "category": row.get("category", ""),
+                "input_type": "raw_formula_input",
             }
         )
-    editor_df = pd.DataFrame(rows, columns=["field_name", "value", "source_status", "source_used", "used_by", "category"])
+    manual_rating_rows = _manual_rating_input_rows(methodology_id)
+    if not manual_rating_rows.empty:
+        rows.extend(manual_rating_rows.to_dict("records"))
+    editor_df = pd.DataFrame(
+        rows,
+        columns=["field_name", "value", "input_type", "source_status", "source_used", "used_by", "category"],
+    )
     return editor_df, {
         "source_result": result,
         "source_value_map": source_value_map,
         "direct_metric_debug": _direct_metric_debug_frame(direct_metric_overrides, issuer_data),
+        "manual_rating_fields": set(manual_rating_rows["field_name"].astype(str)) if not manual_rating_rows.empty else set(),
     }
 
 
@@ -710,19 +756,39 @@ def _save_issuer_data_from_editor(
     issuer_data: Dict[str, Any] = {}
     manual_values: Dict[str, Any] = {}
     source_value_map = source_context.get("source_value_map", {}) or {}
+    manual_rating_fields = {
+        str(field)
+        for field in source_context.get("manual_rating_fields", set())
+        if str(field).strip()
+    }
+    manual_scores = dict(st.session_state.get("manual_scores", {}) or {})
+    for field in manual_rating_fields:
+        manual_scores.pop(field, None)
+
     if isinstance(edited_inputs, pd.DataFrame) and not edited_inputs.empty:
         for _, row in edited_inputs.iterrows():
             field = str(row.get("field_name", "") or "").strip()
             value = _clean_input_value(row.get("value"))
-            if not field or value is None:
+            input_type = str(row.get("input_type", "") or "").strip()
+            if not field:
+                continue
+            if input_type == "manual_rating_input" or field in manual_rating_fields:
+                if value is not None:
+                    numeric = pd.to_numeric(value, errors="coerce")
+                    if pd.notna(numeric):
+                        manual_scores[field] = {"numeric_score": float(numeric)}
+                continue
+            if value is None:
                 continue
             issuer_data[field] = value
-            if not _values_match(value, source_value_map.get(field)):
+            source_status = str(row.get("source_status", "") or "").strip()
+            if source_status == "manual_input" or not _values_match(value, source_value_map.get(field)):
                 manual_values[field] = value
 
     result = source_context.get("source_result", {}) or {}
     st.session_state["issuer_data"] = issuer_data
     st.session_state["manual_source_values"] = manual_values
+    st.session_state["manual_scores"] = manual_scores
     st.session_state["source_report"] = result.get("source_report", pd.DataFrame())
     st.session_state["source_candidates"] = result.get("source_candidates", pd.DataFrame())
     st.session_state["source_readiness_summary"] = result.get("source_readiness_summary", pd.DataFrame())
@@ -742,6 +808,9 @@ def _save_issuer_data_from_editor(
     manual_count = len(manual_values)
     if manual_count:
         st.caption(f"{manual_count} value(s) were saved as manual replacements because they were blank or changed from the suggested source value.")
+    manual_rating_count = len([field for field in manual_rating_fields if field in manual_scores])
+    if manual_rating_count:
+        st.caption(f"{manual_rating_count} manual rating input(s) were saved for the scoreboard.")
     if run_formulas:
         formula_results = _run_formulas_after_source_save(methodology_id, issuer_data)
         st.success(f"Ran formulas from the saved issuer_data. {len(formula_results)} formula rows saved.")
@@ -1522,7 +1591,8 @@ def render_source_workflow(methodology_id: str) -> None:
         st.caption(
             "This is the official calculation input table. Values found from uploads/API/approved sources are prefilled; "
             "required raw fields that are not found stay blank. Derived ratios are calculated later in Formula Results, "
-            "not typed here. Type manual replacements directly in the value column."
+            "not typed here. Manual rating inputs appear in the same table with input_type = manual_rating_input. "
+            "Type confirmed manual replacements directly in the value column."
         )
         frames = _source_candidate_frames(include_manual_values=False)
         issuer_data_editor, source_context = _build_issuer_data_editor(
@@ -1545,6 +1615,7 @@ def render_source_workflow(methodology_id: str) -> None:
                 column_config={
                     "field_name": st.column_config.TextColumn("field_name", disabled=True),
                     "value": st.column_config.TextColumn("value"),
+                    "input_type": st.column_config.TextColumn("input_type", disabled=True),
                     "source_status": st.column_config.TextColumn("source_status", disabled=True),
                     "source_used": st.column_config.TextColumn("source_used", disabled=True),
                     "used_by": st.column_config.TextColumn("used_by", disabled=True),
