@@ -65,7 +65,6 @@ from utils.manual_scores import manual_score_candidates
 from utils.source_workflow import (
     _direct_metric_debug_frame,
     _workbook_direct_metric_overrides,
-    formula_missing_raw_fields,
     render_source_workflow,
 )
 from utils.ui_helpers import (
@@ -266,6 +265,49 @@ def _missing_manual_score_ids(methodology_id: str, template: pd.DataFrame) -> li
         if pd.isna(numeric):
             missing.append(fid)
     return missing
+
+
+def _split_formula_missing_fields(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        pieces = value
+    else:
+        pieces = str(value).replace("|", ";").replace(",", ";").split(";")
+    fields: list[str] = []
+    for piece in pieces:
+        field = str(piece).strip().strip("'\"[]()")
+        if not field or field.lower() in {"nan", "none", "manual"}:
+            continue
+        fields.append(field)
+    return fields
+
+
+def formula_missing_raw_fields(formula_results: pd.DataFrame) -> pd.DataFrame:
+    if not isinstance(formula_results, pd.DataFrame) or formula_results.empty:
+        return pd.DataFrame()
+    if "missing_fields" not in formula_results.columns:
+        return pd.DataFrame()
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for _, row in formula_results.iterrows():
+        status = str(row.get("status", "") or "").strip().lower()
+        if status not in {"missing", "error"}:
+            continue
+        formula_id = str(row.get("formula_id", "") or "").strip()
+        for field in _split_formula_missing_fields(row.get("missing_fields")):
+            key = f"{field}|{formula_id}"
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append(
+                {
+                    "field_name": field,
+                    "formula_id": formula_id,
+                    "category": row.get("category", ""),
+                }
+            )
+    return pd.DataFrame(rows)
 
 
 page_header(
