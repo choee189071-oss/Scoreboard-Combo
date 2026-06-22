@@ -245,7 +245,7 @@ DATA_CONFIRMATION_LANES: List[Dict[str, str]] = [
         "lane": "A. Rating Path",
         "purpose": "The only required path for producing or refreshing a rating.",
         "user_question": "Can I produce a rating yet?",
-        "where_to_work": "Workflow page, Rating Readiness, Blocking Required, and Manual Scores",
+        "where_to_work": "Workflow page, Source Data manual rating inputs, Rating Readiness, and Blocking Required",
     },
     {
         "lane": "B. Evidence Path",
@@ -1913,8 +1913,8 @@ def rating_readiness_metrics(methodology_id: str | None = None) -> dict[str, Any
         stage = "Blocking Inputs"
         next_action = "Resolve formula missing/error rows and Blocking Required fields with no value."
     elif active_manual_missing:
-        stage = "Manual Scores"
-        next_action = "Enter manual qualitative scores, then run scoreboard."
+        stage = "Manual Rating Inputs"
+        next_action = "Enter manual rating inputs in Workflow > Source Data, then run the scoreboard."
     elif not rating_produced:
         stage = "Scoreboard"
         next_action = "Run scoreboard from current formula results."
@@ -1946,7 +1946,7 @@ def rating_readiness_metrics(methodology_id: str | None = None) -> dict[str, Any
                 "status": "Ready" if active_manual_missing == 0 else "Needs Entry",
                 "blocking": "Yes",
                 "count": f"{manual_entered} entered / {active_manual_missing} active missing",
-                "next_action": "Fill qualitative scores only after formula results exist.",
+                "next_action": "Fill manual rating inputs in Workflow > Source Data.",
             },
             {
                 "track": "Rating Readiness",
@@ -1954,7 +1954,7 @@ def rating_readiness_metrics(methodology_id: str | None = None) -> dict[str, Any
                 "status": "Produced" if rating_produced else "Not Run",
                 "blocking": "Yes",
                 "count": rating_label or "No rating yet",
-                "next_action": "Run scoreboard when formulas and manual scores are ready.",
+                "next_action": "Run scoreboard when formulas and manual rating inputs are ready.",
             },
         ]
     )

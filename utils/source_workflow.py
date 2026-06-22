@@ -819,10 +819,15 @@ def _manual_raw_gap_input_frame(missing: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def _render_manual_raw_gap_form(missing: pd.DataFrame, methodology_id: str) -> None:
+def _render_manual_raw_gap_form(
+    missing: pd.DataFrame,
+    methodology_id: str,
+    *,
+    key_prefix: str = "manual_raw_gap",
+) -> None:
     if not isinstance(missing, pd.DataFrame) or missing.empty:
         return
-    with st.form(f"manual_raw_gap_form_{methodology_id}"):
+    with st.form(f"{key_prefix}_form_{methodology_id}"):
         st.markdown("**Manual raw value entry**")
         st.caption(
             "Use this only when the analyst has confirmed the value from ACFR/OS/CreditScope support or a policy assumption. "
@@ -834,7 +839,7 @@ def _render_manual_raw_gap_form(missing: pd.DataFrame, methodology_id: str) -> N
             width="stretch",
             hide_index=True,
             num_rows="fixed",
-            key=f"manual_raw_gap_editor_{methodology_id}",
+            key=f"{key_prefix}_editor_{methodology_id}",
             column_config={
                 "field_name": st.column_config.TextColumn("field_name", disabled=True),
                 "manual_value": st.column_config.NumberColumn("manual_value"),
@@ -853,6 +858,112 @@ def _render_manual_raw_gap_form(missing: pd.DataFrame, methodology_id: str) -> N
             run_formulas=save_manual_run,
         )
         st.rerun()
+
+
+def _split_missing_fields(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        pieces = value
+    else:
+        pieces = re.split(r"[;,|]", str(value))
+    fields: list[str] = []
+    for piece in pieces:
+        field = str(piece).strip().strip("'\"[]()")
+        if not field or field.lower() in {"nan", "none", "manual"}:
+            continue
+        fields.append(field)
+    return fields
+
+
+def _formula_missing_raw_fields(formula_results: pd.DataFrame) -> pd.DataFrame:
+    if not isinstance(formula_results, pd.DataFrame) or formula_results.empty:
+        return pd.DataFrame(columns=["field_name", "blocking_formula_count", "used_by", "category", "unit", "notes"])
+    if "missing_fields" not in formula_results.columns:
+        return pd.DataFrame(columns=["field_name", "blocking_formula_count", "used_by", "category", "unit", "notes"])
+
+    rows_by_field: dict[str, dict[str, Any]] = {}
+    for _, row in formula_results.iterrows():
+        status = str(row.get("status", "") or "").strip().lower()
+        if status not in {"missing", "error"}:
+            continue
+        formula_id = str(row.get("formula_id", "") or "").strip()
+        formula_name = str(row.get("formula_name", "") or formula_id).strip()
+        category = str(row.get("category", "") or "").strip()
+        for field in _split_missing_fields(row.get("missing_fields")):
+            entry = rows_by_field.setdefault(
+                field,
+                {
+                    "field_name": field,
+                    "used_by_values": [],
+                    "category_values": [],
+                    "unit": "",
+                    "notes": (
+                        "Use 0 only if you confirmed no transfer adjustment is needed."
+                        if field == "operating_transfers"
+                        else ""
+                    ),
+                },
+            )
+            if formula_id and formula_id not in entry["used_by_values"]:
+                label = f"{formula_id}: {formula_name}" if formula_name and formula_name != formula_id else formula_id
+                entry["used_by_values"].append(label)
+            if category and category not in entry["category_values"]:
+                entry["category_values"].append(category)
+
+    rows: list[dict[str, Any]] = []
+    for entry in rows_by_field.values():
+        used_by = entry.pop("used_by_values", [])
+        categories = entry.pop("category_values", [])
+        rows.append(
+            {
+                **entry,
+                "blocking_formula_count": len(used_by),
+                "used_by": "; ".join(used_by),
+                "category": "; ".join(categories),
+            }
+        )
+    return pd.DataFrame(rows).sort_values("field_name").reset_index(drop=True) if rows else pd.DataFrame()
+
+
+def render_formula_missing_raw_entry(formula_results: pd.DataFrame, methodology_id: str) -> bool:
+    missing = _formula_missing_raw_fields(formula_results)
+    if missing.empty:
+        return False
+
+    st.markdown("**Fill missing raw inputs**")
+    st.caption(
+        "These are the raw fields currently blocking formulas. Fill only values you have confirmed from "
+        "CreditScope support, ACFR/OS evidence, or an explicit analyst assumption."
+    )
+    st.dataframe(
+        clean_for_display(missing[["field_name", "blocking_formula_count", "used_by", "notes"]]),
+        width="stretch",
+        hide_index=True,
+    )
+    with st.form(f"formula_missing_raw_gap_form_{methodology_id}"):
+        manual_inputs = st.data_editor(
+            _manual_raw_gap_input_frame(missing),
+            width="stretch",
+            hide_index=True,
+            num_rows="fixed",
+            key=f"formula_missing_raw_gap_editor_{methodology_id}",
+            column_config={
+                "field_name": st.column_config.TextColumn("field_name", disabled=True),
+                "manual_value": st.column_config.NumberColumn("manual_value"),
+                "unit": st.column_config.TextColumn("unit", disabled=True),
+                "notes": st.column_config.TextColumn("notes", disabled=True),
+            },
+        )
+        save_and_run = st.form_submit_button("Save missing values and rerun formulas", type="primary")
+    if save_and_run:
+        _save_manual_raw_gap_values(
+            manual_inputs,
+            methodology_id=methodology_id,
+            run_formulas=True,
+        )
+        st.rerun()
+    return True
 
 
 def _readiness_tabs(source_report: pd.DataFrame, methodology_id: str) -> None:
@@ -1059,6 +1170,9 @@ def render_source_workflow(methodology_id: str) -> None:
     notice = st.session_state.pop("source_reset_notice", None)
     if notice:
         st.success(notice)
+    manual_notice = st.session_state.pop("manual_raw_gap_save_notice", "")
+    if manual_notice:
+        st.success(manual_notice)
 
     top_cols = st.columns([1, 1, 2])
     with top_cols[0]:

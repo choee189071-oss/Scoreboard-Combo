@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import streamlit as st
@@ -60,10 +61,11 @@ except ImportError:
         metrics = rating_readiness_metrics(methodology_id)
         st.info(metrics.get("next_action", "Open Data Confirmation for details."))
         return metrics
-from utils.manual_scores import render_manual_score_editor
+from utils.manual_scores import manual_score_candidates, render_manual_score_editor
 from utils.source_workflow import (
     _direct_metric_debug_frame,
     _workbook_direct_metric_overrides,
+    render_formula_missing_raw_entry,
     render_source_workflow,
 )
 from utils.ui_helpers import (
@@ -217,7 +219,7 @@ def render_operating_path_summary(methodology_id: str, readiness: dict) -> None:
             st.markdown("**A. Run Rating**")
             st.write(f"Formula blockers: **{readiness.get('formula_blocking_missing', 0)}**")
             st.write(f"Manual scores missing: **{readiness.get('manual_score_missing', 0)}**")
-            st.caption("Required path: save issuer_data, run formulas, enter manual scores, run scoreboard.")
+            st.caption("Required path: save issuer_data, fill manual rating inputs, run formulas, then run scoreboard.")
     with cols[1]:
         with st.container(border=True):
             st.markdown("**B. Check Evidence**")
@@ -244,6 +246,55 @@ def clear_downstream_state() -> None:
     st.session_state["formula_results"] = pd.DataFrame()
     st.session_state["methodology_formula_results"] = pd.DataFrame()
     st.session_state["rating_output"] = None
+
+
+def _manual_score_value(score: Any) -> Any:
+    if isinstance(score, dict):
+        return score.get("numeric_score")
+    return score
+
+
+def _missing_manual_score_ids(methodology_id: str, template: pd.DataFrame) -> list[str]:
+    candidates = manual_score_candidates(methodology_id, template)
+    if candidates.empty:
+        return []
+    stored = st.session_state.get("manual_scores", {}) or {}
+    missing: list[str] = []
+    for fid in candidates["formula_id"].dropna().astype(str):
+        value = _manual_score_value(stored.get(fid))
+        numeric = pd.to_numeric(value, errors="coerce")
+        if pd.isna(numeric):
+            missing.append(fid)
+    return missing
+
+
+def render_manual_rating_inputs(methodology_id: str, formula_results: pd.DataFrame | None) -> None:
+    try:
+        template = load_factor_template(methodology_id, templates_dir="templates")
+    except Exception as exc:
+        st.warning(f"Could not load manual rating input template: {exc}")
+        return
+    candidates = manual_score_candidates(methodology_id, template)
+    if candidates.empty:
+        return
+
+    st.markdown("**Manual rating inputs**")
+    st.caption(
+        "These are analyst-scored rating inputs, not raw financial source fields. "
+        "Enter them here so the scoreboard can run after formulas are ready."
+    )
+    render_manual_score_editor(
+        methodology_id,
+        template,
+        formula_results,
+        key_prefix="source_manual",
+        show_heading=False,
+    )
+    missing_manual = _missing_manual_score_ids(methodology_id, template)
+    if missing_manual:
+        st.info(f"Manual rating input(s) still needed before the final scoreboard: {', '.join(missing_manual)}")
+    else:
+        st.success("Manual rating inputs are saved in this session.")
 
 
 page_header(
@@ -278,7 +329,7 @@ if st.session_state.get("source_saved_needs_formula_run"):
     st.warning("issuer_data was updated. Run formulas again before relying on formula results or scoreboard output.")
 
 st.subheader("Main Workflow")
-st.caption("A normal user can stay here: confirm sources, run formulas, enter manual scores, then produce the indicative rating.")
+st.caption("A normal user can stay here: confirm sources, fill required inputs, run formulas, then produce the indicative rating.")
 
 issuer_data = st.session_state.get("issuer_data", {}) or {}
 
@@ -351,6 +402,10 @@ issuer_data = st.session_state.get("issuer_data", {}) or {}
 with st.container(border=True):
     st.markdown("**1. Source Data**")
     render_source_workflow(methodology_id)
+    current_formula_results = st.session_state.get("methodology_formula_results")
+    if not isinstance(current_formula_results, pd.DataFrame) or current_formula_results.empty:
+        current_formula_results = st.session_state.get("formula_results")
+    render_manual_rating_inputs(methodology_id, current_formula_results)
 
 render_rating_readiness_overview(methodology_id, expanded=False)
 
@@ -368,7 +423,7 @@ if not isinstance(formula_results, pd.DataFrame) or formula_results.empty:
     formula_results = st.session_state.get("formula_results")
 
 with st.container(border=True):
-    st.markdown("**2. Formula Calculation**")
+    st.markdown("**2. Formula Calculation & Scoreboard**")
     if issuer_data and st.button("Run formulas from current issuer_data", type="primary"):
         try:
             formula_issuer_data = dict(issuer_data)
@@ -398,7 +453,7 @@ with st.container(border=True):
             if direct_metric_overrides:
                 st.caption(
                     f"{len(direct_metric_overrides)} workbook direct metric(s) applied to formula inputs. "
-                    "Full debug details are in Developer Tools > Advanced Diagnostics."
+                    "Full debug details are in Audit & Advanced > Developer Tools > Advanced Diagnostics."
                 )
             if not confirmed_formula_inputs.empty:
                 with st.expander("Confirmed inputs applied to formula engine", expanded=True):
@@ -421,6 +476,7 @@ with st.container(border=True):
             width="stretch",
             hide_index=True,
         )
+        raw_blockers_present = render_formula_missing_raw_entry(formula_results, methodology_id)
         if isinstance(formula_results, pd.DataFrame) and "missing_fields" in formula_results.columns:
             missing_text = ";".join(formula_results["missing_fields"].fillna("").astype(str).tolist())
             if "issuer_population" in missing_text:
@@ -434,7 +490,7 @@ with st.container(border=True):
             if not warning_rows.empty:
                 with st.expander("Formula notes and source warnings", expanded=False):
                     st.caption(
-                        "These notes explain source provenance or review hints. Developer-level direct metric diagnostics live in Developer Tools."
+                        "These notes explain source provenance or review hints. Developer-level direct metric diagnostics live in Audit & Advanced > Developer Tools."
                     )
                     note_cols = ["formula_id", "status", "value", "warning"]
                     st.dataframe(
@@ -447,38 +503,42 @@ with st.container(border=True):
             if not diagnostics.empty:
                 st.session_state["local_gov_formula_diagnostics"] = diagnostics
                 st.caption(
-                    "S&P Local Gov formula diagnostics are available in Developer Tools > Advanced Diagnostics."
+                    "S&P Local Gov formula diagnostics are available in Audit & Advanced > Developer Tools > Advanced Diagnostics."
                 )
-    else:
-        st.info("Formula results have not been created yet.")
 
-with st.container(border=True):
-    st.markdown("**3. Manual Scores and Scoreboard**")
-    if isinstance(formula_results, pd.DataFrame) and not formula_results.empty:
+        st.markdown("**Scoreboard**")
         try:
             template = load_factor_template(methodology_id, templates_dir="templates")
-            with st.form(f"scoreboard_manual_form_{methodology_id}"):
-                manual_scores = render_manual_score_editor(
-                    methodology_id,
-                    template,
-                    formula_results,
-                    key_prefix="home_manual",
-                )
-                run_scoreboard = st.form_submit_button("Run scoreboard from current results", type="primary")
-            if run_scoreboard:
+            missing_manual = _missing_manual_score_ids(methodology_id, template)
+        except Exception as exc:
+            template = pd.DataFrame()
+            missing_manual = []
+            st.warning(f"Could not load scoreboard template: {exc}")
+
+        if raw_blockers_present:
+            st.info("Fill the missing raw input(s) above. Saving them will update issuer_data and rerun formulas.")
+        if missing_manual:
+            st.info(
+                "Fill the manual rating input(s) in Source Data before running the scoreboard: "
+                + ", ".join(missing_manual)
+            )
+        can_run_scoreboard = not raw_blockers_present and not missing_manual
+        if st.button("Run scoreboard from current results", type="primary", disabled=not can_run_scoreboard):
+            try:
                 output = run_rating_engine(
                     methodology_id=methodology_id,
                     formula_results=st.session_state.get("formula_results", formula_results),
-                    manual_scores=manual_scores,
+                    manual_scores=st.session_state.get("manual_scores", {}) or {},
                     thresholds_path="config/scoring_thresholds.csv",
                     templates_dir="templates",
                 )
                 st.session_state["rating_output"] = output
-                st.session_state["manual_scores"] = manual_scores
                 st.success("Scoreboard output saved.")
-        except Exception as exc:
-            st.error("Could not prepare scoreboard controls.")
-            st.exception(exc)
+            except Exception as exc:
+                st.error("Could not run the scoreboard.")
+                st.exception(exc)
+    else:
+        st.info("Formula results have not been created yet.")
 
     rating_output = st.session_state.get("rating_output")
     rating_result = rating_output.get("rating_result", {}) if isinstance(rating_output, dict) else {}
@@ -566,10 +626,6 @@ with st.container(border=True):
                 )
     elif not isinstance(formula_results, pd.DataFrame) or formula_results.empty:
         st.info("Run formulas before producing a scoreboard.")
-
-st.subheader("Developer Tools")
-st.caption("Validation, methodology audit, and exports live on the second page so this workflow stays focused.")
-st.page_link("pages/1_Developer_Tools.py", label="Open Developer Tools")
 
 st.subheader("Current Deal")
 deal_cols = st.columns(3)

@@ -86,6 +86,7 @@ def render_manual_score_editor(
     template: pd.DataFrame,
     formula_results: pd.DataFrame | None = None,
     key_prefix: str = "manual_scores",
+    show_heading: bool = True,
 ) -> Dict[str, Any]:
     candidates = manual_score_candidates(methodology_id, template)
     stored = st.session_state.setdefault("manual_scores", {})
@@ -113,7 +114,8 @@ def render_manual_score_editor(
             "For the West Sacramento fixture, use 2 if you are reproducing the official sample."
         )
 
-    st.markdown("**Manual rating inputs required before scoreboard**")
+    if show_heading:
+        st.markdown("**Manual rating inputs required before scoreboard**")
     status_cols = st.columns(min(3, max(1, len(rows))))
     for idx, (_, row) in enumerate(rows.iterrows()):
         fid = str(row.get("formula_id", "") or "")
