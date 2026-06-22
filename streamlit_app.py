@@ -65,7 +65,7 @@ from utils.manual_scores import manual_score_candidates
 from utils.source_workflow import (
     _direct_metric_debug_frame,
     _workbook_direct_metric_overrides,
-    render_formula_missing_raw_entry,
+    formula_missing_raw_fields,
     render_source_workflow,
 )
 from utils.ui_helpers import (
@@ -443,7 +443,12 @@ with st.container(border=True):
             width="stretch",
             hide_index=True,
         )
-        raw_blockers_present = render_formula_missing_raw_entry(formula_results, methodology_id)
+        raw_missing_inputs = formula_missing_raw_fields(formula_results)
+        raw_blockers_present = not raw_missing_inputs.empty
+        if raw_blockers_present:
+            st.info(
+                "Resolve all missing raw inputs in Source Data > Step 3 > Missing inputs, then save all inputs and rerun formulas."
+            )
         if isinstance(formula_results, pd.DataFrame) and "missing_fields" in formula_results.columns:
             missing_text = ";".join(formula_results["missing_fields"].fillna("").astype(str).tolist())
             if "issuer_population" in missing_text:
@@ -483,7 +488,7 @@ with st.container(border=True):
             st.warning(f"Could not load scoreboard template: {exc}")
 
         if raw_blockers_present:
-            st.info("Fill the missing raw input(s) above. Saving them will update issuer_data and rerun formulas.")
+            st.info("The scoreboard unlocks after the unified Missing inputs table is filled and formulas rerun.")
         if missing_manual:
             st.info(
                 "Fill the manual rating input(s) in Source Data before running the scoreboard: "

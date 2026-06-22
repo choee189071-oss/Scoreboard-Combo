@@ -665,6 +665,48 @@ def _manual_rating_input_rows(methodology_id: str) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _missing_input_frame(editor_df: pd.DataFrame) -> pd.DataFrame:
+    if not isinstance(editor_df, pd.DataFrame) or editor_df.empty:
+        return pd.DataFrame(columns=editor_df.columns if isinstance(editor_df, pd.DataFrame) else [])
+    value_blank = editor_df.get("value", pd.Series("", index=editor_df.index)).fillna("").astype(str).str.strip().eq("")
+    status_missing = (
+        editor_df.get("source_status", pd.Series("", index=editor_df.index))
+        .fillna("")
+        .astype(str)
+        .str.lower()
+        .eq("missing")
+    )
+    missing = editor_df[value_blank | status_missing].copy()
+    if missing.empty:
+        return missing
+    type_order = {"raw_formula_input": 0, "manual_rating_input": 1}
+    missing["_type_rank"] = missing["input_type"].map(type_order).fillna(9)
+    return (
+        missing.sort_values(["_type_rank", "field_name"])
+        .drop(columns=["_type_rank"])
+        .reset_index(drop=True)
+    )
+
+
+def _merge_missing_input_edits(editor_df: pd.DataFrame, missing_edits: pd.DataFrame) -> pd.DataFrame:
+    if not isinstance(editor_df, pd.DataFrame) or editor_df.empty:
+        return pd.DataFrame()
+    merged = editor_df.copy()
+    if not isinstance(missing_edits, pd.DataFrame) or missing_edits.empty:
+        return merged
+    for _, row in missing_edits.iterrows():
+        field = str(row.get("field_name", "") or "").strip()
+        input_type = str(row.get("input_type", "") or "").strip()
+        if not field:
+            continue
+        mask = merged["field_name"].astype(str).eq(field)
+        if input_type and "input_type" in merged.columns:
+            mask &= merged["input_type"].astype(str).eq(input_type)
+        if mask.any():
+            merged.loc[mask, "value"] = row.get("value")
+    return merged
+
+
 def _build_issuer_data_editor(
     *,
     methodology_id: str,
@@ -995,6 +1037,10 @@ def _formula_missing_raw_fields(formula_results: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows).sort_values("field_name").reset_index(drop=True) if rows else pd.DataFrame()
 
 
+def formula_missing_raw_fields(formula_results: pd.DataFrame) -> pd.DataFrame:
+    return _formula_missing_raw_fields(formula_results)
+
+
 def render_formula_missing_raw_entry(formula_results: pd.DataFrame, methodology_id: str) -> bool:
     missing = _formula_missing_raw_fields(formula_results)
     if missing.empty:
@@ -1099,7 +1145,7 @@ def _readiness_tabs(source_report: pd.DataFrame, methodology_id: str) -> None:
                 if idx == 0:
                     st.info(
                         "These fields were not separately extracted from the raw source inventory. "
-                        "They are the remaining source fields to confirm or fill before formula scoring is complete."
+                        "Use Step 3 Missing inputs to fill any value that should feed scoring."
                     )
                 elif idx == 3:
                     st.info(
@@ -1107,8 +1153,6 @@ def _readiness_tabs(source_report: pd.DataFrame, methodology_id: str) -> None:
                         "support-tab direct metric. They are not manual issuer_data inputs."
                     )
                 st.dataframe(clean_for_display(frame), width="stretch", hide_index=True)
-                if idx == 0:
-                    _render_manual_raw_gap_form(frame, methodology_id)
 
 
 def _uploaded_sources_summary() -> pd.DataFrame:
@@ -1605,29 +1649,50 @@ def render_source_workflow(methodology_id: str) -> None:
             st.caption(f"{len(frames)} source candidate group(s) are feeding the suggested values in this table.")
         else:
             st.info("No source candidates yet. The table is still available so required calculation inputs are visible.")
+        missing_inputs = _missing_input_frame(issuer_data_editor)
         with st.form(f"issuer_data_input_form_{methodology_id}"):
-            edited_inputs = st.data_editor(
-                issuer_data_editor,
-                width="stretch",
-                hide_index=True,
-                num_rows="fixed",
-                key=f"issuer_data_input_editor_{methodology_id}",
-                column_config={
-                    "field_name": st.column_config.TextColumn("field_name", disabled=True),
-                    "value": st.column_config.TextColumn("value"),
-                    "input_type": st.column_config.TextColumn("input_type", disabled=True),
-                    "source_status": st.column_config.TextColumn("source_status", disabled=True),
-                    "source_used": st.column_config.TextColumn("source_used", disabled=True),
-                    "used_by": st.column_config.TextColumn("used_by", disabled=True),
-                    "category": st.column_config.TextColumn("category", disabled=True),
-                },
-            )
+            column_config = {
+                "field_name": st.column_config.TextColumn("field_name", disabled=True),
+                "value": st.column_config.TextColumn("value"),
+                "input_type": st.column_config.TextColumn("input_type", disabled=True),
+                "source_status": st.column_config.TextColumn("source_status", disabled=True),
+                "source_used": st.column_config.TextColumn("source_used", disabled=True),
+                "used_by": st.column_config.TextColumn("used_by", disabled=True),
+                "category": st.column_config.TextColumn("category", disabled=True),
+            }
+            if not missing_inputs.empty:
+                st.markdown("**Missing inputs**")
+                st.caption(
+                    "Fill every missing value here in one pass. This table includes both missing raw formula inputs "
+                    "and missing manual rating inputs."
+                )
+                missing_edits = st.data_editor(
+                    missing_inputs,
+                    width="stretch",
+                    hide_index=True,
+                    num_rows="fixed",
+                    key=f"missing_input_editor_{methodology_id}",
+                    column_config=column_config,
+                )
+                with st.expander("View full input table", expanded=False):
+                    st.dataframe(clean_for_display(issuer_data_editor), width="stretch", hide_index=True)
+                edited_inputs = _merge_missing_input_edits(issuer_data_editor, missing_edits)
+            else:
+                st.success("No missing inputs. Review the full input table below.")
+                edited_inputs = st.data_editor(
+                    issuer_data_editor,
+                    width="stretch",
+                    hide_index=True,
+                    num_rows="fixed",
+                    key=f"issuer_data_input_editor_{methodology_id}",
+                    column_config=column_config,
+                )
             button_cols = st.columns(2)
             save_inputs = button_cols[0].form_submit_button(
-                "Save issuer_data",
+                "Save all inputs",
                 type="primary",
             )
-            save_inputs_and_run = button_cols[1].form_submit_button("Save issuer_data and run formulas")
+            save_inputs_and_run = button_cols[1].form_submit_button("Save all inputs and run formulas")
 
         if save_inputs or save_inputs_and_run:
             _save_issuer_data_from_editor(
