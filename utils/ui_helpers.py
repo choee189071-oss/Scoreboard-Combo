@@ -444,6 +444,6 @@ def formula_action(summary: Mapping[str, Any], formula_results: pd.DataFrame | N
     else:
         action_panel(
             "Formula layer is ready for scoring",
-            f"{ready} formulas are ready. Fill any manual rating inputs in Source Data, then run the Scoreboard.",
+            f"{ready} formulas are ready. Run the Scoreboard when the input table looks correct.",
             "good",
         )

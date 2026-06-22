@@ -1650,6 +1650,20 @@ def render_source_workflow(methodology_id: str) -> None:
         else:
             st.info("No source candidates yet. The table is still available so required calculation inputs are visible.")
         missing_inputs = _missing_input_frame(issuer_data_editor)
+        ready_count = max(0, len(issuer_data_editor) - len(missing_inputs))
+        raw_missing_count = int(missing_inputs["input_type"].astype(str).eq("raw_formula_input").sum()) if not missing_inputs.empty else 0
+        manual_missing_count = int(missing_inputs["input_type"].astype(str).eq("manual_rating_input").sum()) if not missing_inputs.empty else 0
+        summary_cols = st.columns(4)
+        summary_cols[0].metric("Total Inputs", len(issuer_data_editor))
+        summary_cols[1].metric("Ready Values", ready_count)
+        summary_cols[2].metric("Raw Missing", raw_missing_count)
+        summary_cols[3].metric("Manual Missing", manual_missing_count)
+        st.markdown("**All inputs**")
+        st.caption(
+            "This is the complete current input table: ready values, missing raw fields, and manual rating inputs are shown together."
+        )
+        st.dataframe(clean_for_display(issuer_data_editor), width="stretch", hide_index=True)
+        edited_inputs = issuer_data_editor
         with st.form(f"issuer_data_input_form_{methodology_id}"):
             column_config = {
                 "field_name": st.column_config.TextColumn("field_name", disabled=True),
@@ -1663,8 +1677,7 @@ def render_source_workflow(methodology_id: str) -> None:
             if not missing_inputs.empty:
                 st.markdown("**Missing inputs**")
                 st.caption(
-                    "Fill every missing value here in one pass. This table includes both missing raw formula inputs "
-                    "and missing manual rating inputs."
+                    "Only unresolved rows appear here. Fill every missing value in one pass; ready values above are not lost."
                 )
                 missing_edits = st.data_editor(
                     missing_inputs,
@@ -1674,19 +1687,9 @@ def render_source_workflow(methodology_id: str) -> None:
                     key=f"missing_input_editor_{methodology_id}",
                     column_config=column_config,
                 )
-                with st.expander("View full input table", expanded=False):
-                    st.dataframe(clean_for_display(issuer_data_editor), width="stretch", hide_index=True)
                 edited_inputs = _merge_missing_input_edits(issuer_data_editor, missing_edits)
             else:
-                st.success("No missing inputs. Review the full input table below.")
-                edited_inputs = st.data_editor(
-                    issuer_data_editor,
-                    width="stretch",
-                    hide_index=True,
-                    num_rows="fixed",
-                    key=f"issuer_data_input_editor_{methodology_id}",
-                    column_config=column_config,
-                )
+                st.success("No missing inputs. Save the complete table above when you are ready.")
             button_cols = st.columns(2)
             save_inputs = button_cols[0].form_submit_button(
                 "Save all inputs",

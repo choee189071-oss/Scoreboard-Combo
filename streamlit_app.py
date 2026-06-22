@@ -19,8 +19,6 @@ try:
     from utils.data_confirmation import (
         apply_confirmed_inputs_to_issuer_data,
         evidence_confidence_metrics,
-        rating_readiness_metrics,
-        render_rating_readiness_overview,
     )
 except ImportError:
     from utils import data_confirmation as _data_confirmation
@@ -42,25 +40,6 @@ except ImportError:
             "verified_denominator": 0,
         }
 
-    def rating_readiness_metrics(methodology_id: str | None = None):
-        helper = getattr(_data_confirmation, "rating_readiness_metrics", None)
-        if callable(helper):
-            return helper(methodology_id)
-        return {
-            "stage": "Unknown",
-            "next_action": "Open Data Confirmation for details.",
-            "raw_source_missing": 0,
-            "formula_blocking_missing": 0,
-            "manual_score_missing": 0,
-            "rating_label": "",
-            "rating_ready": False,
-        }
-
-    def render_rating_readiness_overview(methodology_id: str | None = None, *, expanded: bool = True):
-        _ = expanded
-        metrics = rating_readiness_metrics(methodology_id)
-        st.info(metrics.get("next_action", "Open Data Confirmation for details."))
-        return metrics
 from utils.manual_scores import manual_score_candidates
 from utils.source_workflow import (
     _direct_metric_debug_frame,
@@ -69,13 +48,11 @@ from utils.source_workflow import (
 )
 from utils.ui_helpers import (
     SCHEME_OPTIONS,
-    action_panel,
     clean_for_display,
     current_context_card,
     formula_action,
     init_state,
     page_header,
-    source_readiness_counts,
     status_counts,
 )
 
@@ -209,30 +186,6 @@ def local_gov_formula_diagnostics(formula_results: pd.DataFrame, issuer_data: di
     return pd.DataFrame(rows)
 
 
-def render_operating_path_summary(methodology_id: str, readiness: dict) -> None:
-    evidence = evidence_confidence_metrics(methodology_id)
-    rating_label = readiness.get("rating_label") or "Not run"
-    cols = st.columns(3)
-    with cols[0]:
-        with st.container(border=True):
-            st.markdown("**A. Run Rating**")
-            st.write(f"Formula blockers: **{readiness.get('formula_blocking_missing', 0)}**")
-            st.write(f"Manual scores missing: **{readiness.get('manual_score_missing', 0)}**")
-            st.caption("Required path: save issuer_data, fill manual rating inputs, run formulas, then run scoreboard.")
-    with cols[1]:
-        with st.container(border=True):
-            st.markdown("**B. Check Evidence**")
-            st.write(f"Awaiting evidence: **{readiness.get('evidence_awaiting', 0)}**")
-            st.write(f"Verified fields: **{evidence.get('verified_fields', 0)} / {evidence.get('verified_denominator', 0)}**")
-            st.caption("Optional QA path: ACFR, OS, API, or workbook evidence validates values already feeding the rating.")
-    with cols[2]:
-        with st.container(border=True):
-            st.markdown("**C. Apply / Publish**")
-            st.write(f"Current rating: **{rating_label}**")
-            st.write(f"Evidence coverage: **{evidence.get('evidence_coverage_pct', 0):.0f}%**")
-            st.caption("Approved evidence can replace issuer_data and rerun formulas before exports.")
-
-
 def clear_downstream_state() -> None:
     for key in DOWNSTREAM_STATE_KEYS:
         st.session_state.pop(key, None)
@@ -265,6 +218,39 @@ def _missing_manual_score_ids(methodology_id: str, template: pd.DataFrame) -> li
         if pd.isna(numeric):
             missing.append(fid)
     return missing
+
+
+def _formula_results_with_manual_scores(formula_results: pd.DataFrame) -> pd.DataFrame:
+    if not isinstance(formula_results, pd.DataFrame) or formula_results.empty:
+        return formula_results
+    if "formula_id" not in formula_results.columns:
+        return formula_results
+
+    stored = st.session_state.get("manual_scores", {}) or {}
+    if not stored:
+        return formula_results
+
+    output = formula_results.copy()
+    for idx, row in output.iterrows():
+        fid = str(row.get("formula_id", "") or "").strip()
+        if not fid or fid not in stored:
+            continue
+        value = _manual_score_value(stored.get(fid))
+        numeric = pd.to_numeric(value, errors="coerce")
+        if pd.isna(numeric):
+            continue
+        output.at[idx, "value"] = float(numeric)
+        if "status" in output.columns:
+            output.at[idx, "status"] = "ready"
+        if "missing_fields" in output.columns:
+            output.at[idx, "missing_fields"] = ""
+        if "error" in output.columns:
+            output.at[idx, "error"] = ""
+        if "warning" in output.columns:
+            warning = str(output.at[idx, "warning"] or "").strip()
+            note = "Manual rating input saved in Source Data."
+            output.at[idx, "warning"] = f"{warning} {note}".strip() if warning else note
+    return output
 
 
 def _split_formula_missing_fields(value: Any) -> list[str]:
@@ -317,27 +303,7 @@ page_header(
 )
 current_context_card()
 
-source_report = st.session_state.get("source_report")
-formula_results = st.session_state.get("methodology_formula_results")
-if not isinstance(formula_results, pd.DataFrame) or formula_results.empty:
-    formula_results = st.session_state.get("formula_results")
-rating_output = st.session_state.get("rating_output")
-
-source_counts = source_readiness_counts(source_report)
-formula_counts = status_counts(formula_results, "status")
-rating_result = rating_output.get("rating_result", {}) if isinstance(rating_output, dict) else {}
 methodology_id = st.session_state.get("methodology_id", "moodys_ccd_go")
-readiness = rating_readiness_metrics(methodology_id)
-
-st.subheader("Run Status")
-status_cols = st.columns(4)
-status_cols[0].metric("Current Stage", readiness.get("stage", "Not started"))
-status_cols[1].metric("Formula Blocking Missing", readiness.get("formula_blocking_missing", 0))
-status_cols[2].metric("Manual Score Missing", readiness.get("manual_score_missing", 0))
-status_cols[3].metric("Rating", readiness.get("rating_label") or "Not run")
-panel_kind = "good" if readiness.get("rating_ready") or readiness.get("rating_produced") else "warn"
-action_panel("Next step", str(readiness.get("next_action", "Continue workflow.")), panel_kind)
-render_operating_path_summary(methodology_id, readiness)
 if st.session_state.get("source_saved_needs_formula_run"):
     st.warning("issuer_data was updated. Run formulas again before relying on formula results or scoreboard output.")
 
@@ -416,16 +382,6 @@ with st.container(border=True):
     st.markdown("**1. Source Data**")
     render_source_workflow(methodology_id)
 
-render_rating_readiness_overview(methodology_id, expanded=False)
-
-with st.container(border=True):
-    st.markdown("**Review & Adjust**")
-    st.caption(
-        "Use this after saving issuer_data when you want to verify, replace, or manually correct values. "
-        "Approved changes flow back into the same Workflow input table and clear stale rating output."
-    )
-    st.page_link("pages/0_Data_Confirmation.py", label="Open Review & Adjust")
-
 issuer_data = st.session_state.get("issuer_data", {}) or {}
 formula_results = st.session_state.get("methodology_formula_results")
 if not isinstance(formula_results, pd.DataFrame) or formula_results.empty:
@@ -476,31 +432,36 @@ with st.container(border=True):
     formula_results = st.session_state.get("methodology_formula_results")
     if not isinstance(formula_results, pd.DataFrame) or formula_results.empty:
         formula_results = st.session_state.get("formula_results")
-    formula_counts = status_counts(formula_results, "status")
+    formula_results_for_display = _formula_results_with_manual_scores(formula_results)
+    formula_counts = status_counts(formula_results_for_display, "status")
     if formula_counts:
-        formula_action(formula_counts, formula_results)
+        formula_action(formula_counts, formula_results_for_display)
         show_cols = ["formula_id", "formula_name", "category", "status", "value", "missing_fields", "error"]
         st.dataframe(
-            clean_for_display(formula_results[[c for c in show_cols if c in formula_results.columns]]),
+            clean_for_display(
+                formula_results_for_display[[c for c in show_cols if c in formula_results_for_display.columns]]
+            ),
             width="stretch",
             hide_index=True,
         )
-        raw_missing_inputs = formula_missing_raw_fields(formula_results)
+        raw_missing_inputs = formula_missing_raw_fields(formula_results_for_display)
         raw_blockers_present = not raw_missing_inputs.empty
         if raw_blockers_present:
             st.info(
                 "Resolve all missing raw inputs in Source Data > Step 3 > Missing inputs, then save all inputs and rerun formulas."
             )
-        if isinstance(formula_results, pd.DataFrame) and "missing_fields" in formula_results.columns:
-            missing_text = ";".join(formula_results["missing_fields"].fillna("").astype(str).tolist())
+        if isinstance(formula_results_for_display, pd.DataFrame) and "missing_fields" in formula_results_for_display.columns:
+            missing_text = ";".join(formula_results_for_display["missing_fields"].fillna("").astype(str).tolist())
             if "issuer_population" in missing_text:
                 st.info(
                     "Debt and pension per-capita formulas need `issuer_population`, not county population. "
                     "For West Sacramento this should come from the CreditScope Population row or the issuer population in ACFR/OS. "
                     "Re-save issuer_data after reuploading the CreditScope workbook, or type `issuer_population` in the value table."
                 )
-        if "warning" in formula_results.columns:
-            warning_rows = formula_results[formula_results["warning"].fillna("").astype(str).str.strip().ne("")]
+        if "warning" in formula_results_for_display.columns:
+            warning_rows = formula_results_for_display[
+                formula_results_for_display["warning"].fillna("").astype(str).str.strip().ne("")
+            ]
             if not warning_rows.empty:
                 with st.expander("Formula notes and source warnings", expanded=False):
                     st.caption(
@@ -513,7 +474,7 @@ with st.container(border=True):
                         hide_index=True,
                     )
         if methodology_id == "sp_local_gov_k12":
-            diagnostics = local_gov_formula_diagnostics(formula_results, issuer_data)
+            diagnostics = local_gov_formula_diagnostics(formula_results_for_display, issuer_data)
             if not diagnostics.empty:
                 st.session_state["local_gov_formula_diagnostics"] = diagnostics
                 st.caption(
@@ -640,35 +601,3 @@ with st.container(border=True):
                 )
     elif not isinstance(formula_results, pd.DataFrame) or formula_results.empty:
         st.info("Run formulas before producing a scoreboard.")
-
-st.subheader("Current Deal")
-deal_cols = st.columns(3)
-deal_cols[0].metric("Issuer", st.session_state.get("issuer_name") or "Not set")
-deal_cols[1].metric("Methodology", SCHEME_OPTIONS.get(st.session_state.get("methodology_id"), "Not set"))
-deal_cols[2].metric("Analysis Year", st.session_state.get("analysis_year") or "Not set")
-
-with st.expander("Session details", expanded=False):
-    c1, c2 = st.columns(2)
-    with c1:
-        st.write("Source inventory readiness")
-        st.caption("Extraction-level status only. Rating Readiness shows what actually blocks scoring.")
-        if source_counts:
-            st.dataframe(
-                pd.DataFrame(
-                    [{"readiness_status": key, "field_count": value} for key, value in source_counts.items()]
-                ),
-                width="stretch",
-                hide_index=True,
-            )
-        else:
-            st.info("No source_report saved yet.")
-    with c2:
-        st.write("Formula status")
-        if formula_counts:
-            st.dataframe(
-                pd.DataFrame([{"status": key, "formula_count": value} for key, value in formula_counts.items()]),
-                width="stretch",
-                hide_index=True,
-            )
-        else:
-            st.info("No formula_results saved yet.")
