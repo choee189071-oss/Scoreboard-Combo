@@ -60,11 +60,24 @@ Create `.streamlit/secrets.toml` locally when needed:
 ```toml
 OPENAI_API_KEY = "..."
 OPENAI_MODEL = "gpt-4.1-mini"
+PUBFIN_API_KEY = "..."        # Perplexity/Sonar source discovery
+LLAMA_CLOUD_API_KEY = "..."   # LlamaCloud PDF parsing for Review & Audit
 CENSUS_API_KEY = "..."
 BEA_API_KEY = "..."
 ```
 
 `.streamlit/secrets.toml` is intentionally ignored by git.
+
+`PUBFIN_API_KEY` is read as the Perplexity API key for the Review & Audit
+source recommendation workflow. `PERPLEXITY_API_KEY` is also accepted as a
+fallback name. The app uses Perplexity Search API first for structured links and
+falls back to Sonar-style source discovery when needed. If `LLAMA_CLOUD_API_KEY`
+is absent, uploaded PDFs are still processed with the local `pypdf` fallback,
+but scanned or table-heavy PDFs may need LlamaCloud for stronger extraction.
+Parsed PDF pages are cached in the Streamlit session by file hash and parser
+settings so repeated evidence runs do not reparse the same upload.
+The Review & Audit page includes a deploy sanity check for `llama-cloud`,
+`pypdf`, `PUBFIN_API_KEY`, and `LLAMA_CLOUD_API_KEY`.
 
 ## Verification
 

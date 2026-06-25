@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import json
+import os
 import sys
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 import pandas as pd
 import streamlit as st
@@ -12,22 +12,32 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from scripts.build_accuracy_matrix_workbook import build_workbook
-from scripts.methodology_accuracy_matrix import CASES, build_accuracy_package
+from engine.ai_audit_pipeline import (
+    build_deploy_sanity_check,
+    build_section_b_pdf_audit,
+    build_section_b_term_matrix,
+    perplexity_source_recommendations,
+    recommendations_to_source_candidates,
+    uploaded_pdf_documents_from_payloads,
+)
+from engine.data_sourcing_engine import normalize_source_candidates
+from engine.methodology_audit import AUDIT_METHODOLOGIES
 from utils.ui_helpers import ADVANCED_PAGE_LINKS, clean_for_display, current_context_card, init_state, page_header
 
 
-DATA_DIR = PROJECT_ROOT / "work" / "methodology_accuracy_matrix"
-WORKBOOK_PATH = DATA_DIR / "methodology_accuracy_matrix.xlsx"
-TABLES_PATH = DATA_DIR / "tables.json"
-
-
-def _load_tables(data_dir: Path = DATA_DIR) -> dict[str, pd.DataFrame]:
-    tables_path = data_dir / "tables.json"
-    if not tables_path.exists():
-        return {}
-    raw = json.loads(tables_path.read_text(encoding="utf-8"))
-    return {name: pd.DataFrame(rows) for name, rows in raw.items()}
+def _secret_value(*names: str) -> str:
+    for name in names:
+        value = os.getenv(name)
+        if value:
+            return str(value)
+    try:
+        for name in names:
+            value = st.secrets.get(name)  # type: ignore[attr-defined]
+            if value:
+                return str(value)
+    except Exception:
+        pass
+    return ""
 
 
 def _download_csv(label: str, df: pd.DataFrame, file_name: str) -> None:
@@ -38,385 +48,401 @@ def _download_csv(label: str, df: pd.DataFrame, file_name: str) -> None:
             file_name=file_name,
             mime="text/csv",
         )
-    else:
-        st.info(f"No {file_name} data available.")
 
 
-def _download_excel(path: Path = WORKBOOK_PATH) -> None:
-    if path.exists():
-        st.download_button(
-            "Download audit workbook",
-            data=path.read_bytes(),
-            file_name=path.name,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+def _uploaded_payloads(files: Iterable[Any], *, source_name: str, source_slot: str) -> list[dict[str, Any]]:
+    payloads: list[dict[str, Any]] = []
+    for uploaded in files or []:
+        if uploaded is None:
+            continue
+        if hasattr(uploaded, "seek"):
+            uploaded.seek(0)
+        payload = uploaded.getvalue() if hasattr(uploaded, "getvalue") else uploaded.read()
+        if isinstance(payload, str):
+            payload = payload.encode("utf-8")
+        if hasattr(uploaded, "seek"):
+            uploaded.seek(0)
+        payloads.append(
+            {
+                "source_slot": source_slot,
+                "source_name": source_name,
+                "file_name": str(getattr(uploaded, "name", "") or "uploaded.pdf"),
+                "payload": bytes(payload),
+            }
         )
-    else:
-        st.info("Excel workbook has not been generated yet.")
-
-
-def _selected_values(label: str, values: Iterable[str], key: str) -> list[str]:
-    options = sorted({str(value) for value in values if str(value).strip() and str(value).lower() != "nan"})
-    return st.multiselect(label, options, default=[], key=key)
-
-
-def _apply_common_filters(df: pd.DataFrame, *, key_prefix: str) -> pd.DataFrame:
-    if df.empty:
-        return df
-    out = df.copy()
-    filter_cols = st.columns(3)
-    with filter_cols[0]:
-        cases = _selected_values("Case", out.get("fixture_key", pd.Series(dtype=str)), f"{key_prefix}_cases")
-    with filter_cols[1]:
-        methodologies = _selected_values(
-            "Methodology",
-            out.get("methodology_id", pd.Series(dtype=str)),
-            f"{key_prefix}_methodologies",
-        )
-    with filter_cols[2]:
-        statuses = _selected_values(
-            "Status",
-            out.get("value_status", out.get("coverage_status", out.get("candidate_status", pd.Series(dtype=str)))),
-            f"{key_prefix}_statuses",
-        )
-    if cases and "fixture_key" in out.columns:
-        out = out[out["fixture_key"].astype(str).isin(cases)]
-    if methodologies and "methodology_id" in out.columns:
-        out = out[out["methodology_id"].astype(str).isin(methodologies)]
-    status_col = next((col for col in ["value_status", "coverage_status", "candidate_status"] if col in out.columns), "")
-    if statuses and status_col:
-        out = out[out[status_col].astype(str).isin(statuses)]
-    return out
-
-
-def _metric_count(df: pd.DataFrame, column: str, value: str) -> int:
-    if df.empty or column not in df.columns:
-        return 0
-    return int(df[column].fillna("").astype(str).str.lower().eq(value.lower()).sum())
-
-
-def _truthy_count(df: pd.DataFrame, column: str) -> int:
-    if df.empty or column not in df.columns:
-        return 0
-    return int(df[column].fillna(False).astype(str).str.lower().isin(["true", "1", "yes"]).sum())
-
-
-def _status_table(df: pd.DataFrame, column: str) -> pd.DataFrame:
-    if df.empty or column not in df.columns:
-        return pd.DataFrame(columns=[column, "count"])
-    return (
-        df[column]
-        .fillna("blank")
-        .astype(str)
-        .value_counts()
-        .rename_axis(column)
-        .reset_index(name="count")
-    )
-
-
-def _missing_workbooks() -> list[Path]:
-    return [case.workbook_path for case in CASES if not case.workbook_path.exists()]
+    return payloads
 
 
 def _render_advanced_links() -> None:
     with st.expander("Advanced tools", expanded=False):
-        st.caption(
-            "These are builder/debugging workspaces. Normal scoring runs should stay in Workflow and Review & Adjust."
-        )
+        st.caption("Builder/debugging workspaces. Section B below is the normal review carrier.")
         cols = st.columns(len(ADVANCED_PAGE_LINKS))
         for idx, (_, (path, label)) in enumerate(ADVANCED_PAGE_LINKS.items()):
             with cols[idx]:
                 with st.container(border=True):
                     st.markdown(f"**{label}**")
-                    if label == "Source Intake Lab":
-                        st.caption("Debug source_candidates, PDF extraction, and source selection.")
-                    elif label == "Data Platform":
-                        st.caption("Inspect field dictionaries, source priority, and gap reports.")
-                    else:
-                        st.caption("Inspect session state, formula diagnostics, and developer exports.")
                     try:
                         st.page_link(path, label=f"Open {label}")
                     except Exception:
                         st.caption(f"Open from sidebar/page list: {label}")
 
 
-st.set_page_config(page_title="Audit & Advanced", layout="wide")
+def _status_badge(label: str, configured: bool, secret_name: str) -> None:
+    if configured:
+        st.success(f"{label} configured")
+    else:
+        st.info(f"{label} disabled. Add `{secret_name}` in Streamlit secrets to enable it.")
+
+
+def _render_deploy_sanity_check(pubfin_key: str, llama_key: str) -> None:
+    checks = build_deploy_sanity_check(
+        pubfin_api_key=pubfin_key,
+        llama_cloud_api_key=llama_key,
+    )
+    blockers = int(checks["deploy_blocker"].astype(bool).sum()) if not checks.empty else 0
+    ready = int(checks["status"].astype(str).eq("ready").sum()) if not checks.empty else 0
+    with st.expander("Deploy sanity check", expanded=True):
+        metric_cols = st.columns(3)
+        metric_cols[0].metric("Checks", len(checks))
+        metric_cols[1].metric("Ready", ready)
+        metric_cols[2].metric("Deploy blockers", blockers)
+        if blockers:
+            st.warning("Required deployment checks are missing. Fix these before relying on Review & Audit in production.")
+        else:
+            st.success("Required deployment checks are ready. Optional AI features may still need secrets.")
+        display_cols = ["check", "status", "required", "deploy_blocker", "detail"]
+        st.table(
+            clean_for_display(checks[[col for col in display_cols if col in checks.columns]]),
+        )
+
+
+def _display_recommendations(recommendations: pd.DataFrame) -> None:
+    if recommendations.empty:
+        st.info("No recommended links returned yet.")
+        return
+    display_cols = [
+        "source_type",
+        "title",
+        "url",
+        "date_or_year",
+        "related_fields",
+        "concept_terms",
+        "reason",
+        "confidence",
+    ]
+    st.dataframe(
+        clean_for_display(recommendations[[col for col in display_cols if col in recommendations.columns]]),
+        width="stretch",
+        hide_index=True,
+    )
+    _download_csv("Download recommended links", recommendations, "section_b_recommended_links.csv")
+
+
+def _store_pdf_audit(result: dict[str, pd.DataFrame]) -> None:
+    st.session_state["section_b_pdf_pages"] = result.get("pdf_pages", pd.DataFrame())
+    st.session_state["section_b_pdf_evidence"] = result.get("pdf_evidence", pd.DataFrame())
+    st.session_state["section_b_source_candidates"] = result.get("source_candidates", pd.DataFrame())
+
+
+def _store_recommendations(recommendations: pd.DataFrame) -> None:
+    st.session_state["section_b_recommended_links"] = recommendations
+    st.session_state["section_b_recommended_link_candidates"] = recommendations_to_source_candidates(recommendations)
+
+
+def _send_candidates_to_review(candidates: pd.DataFrame) -> int:
+    if candidates is None or candidates.empty:
+        return 0
+    existing = st.session_state.get("source_candidates")
+    frames = [candidates]
+    if isinstance(existing, pd.DataFrame) and not existing.empty:
+        frames.insert(0, existing)
+    combined = normalize_source_candidates(pd.concat(frames, ignore_index=True, sort=False))
+    dedupe_cols = [
+        col
+        for col in ["field_name", "value", "source_name", "source_file", "source_table", "source_cell_or_api"]
+        if col in combined.columns
+    ]
+    if dedupe_cols:
+        combined = combined.drop_duplicates(subset=dedupe_cols, keep="last").reset_index(drop=True)
+    before = len(existing) if isinstance(existing, pd.DataFrame) else 0
+    st.session_state["source_candidates"] = combined
+    return max(0, len(combined) - before)
+
+
+def _parse_cache() -> dict[str, pd.DataFrame]:
+    cache = st.session_state.get("section_b_pdf_parse_cache")
+    if not isinstance(cache, dict):
+        cache = {}
+        st.session_state["section_b_pdf_parse_cache"] = cache
+    return cache
+
+
+st.set_page_config(page_title="Review & Audit", layout="wide")
 init_state()
 page_header(
-    "Audit & Advanced",
-    "No-cheat benchmark audit first; builder/debugging tools are tucked into Advanced tools below.",
+    "Review & Audit",
+    "Section B: AI-assisted methodology source review, uploaded PDF evidence, and recommended source links.",
     "audit_platform",
 )
 current_context_card()
 _render_advanced_links()
 
-missing_workbooks = _missing_workbooks()
-if missing_workbooks:
-    with st.expander("Missing local benchmark workbooks", expanded=not TABLES_PATH.exists()):
-        st.warning("Some configured local benchmark workbooks are not available in this environment.")
-        st.dataframe(
-            pd.DataFrame({"missing_workbook": [str(path) for path in missing_workbooks]}),
-            width="stretch",
-            hide_index=True,
-        )
+perplexity_key = _secret_value("PUBFIN_API_KEY", "PERPLEXITY_API_KEY")
+llama_key = _secret_value("LLAMA_CLOUD_API_KEY")
 
-button_cols = st.columns([1.1, 1, 1.4])
-with button_cols[0]:
-    run_disabled = bool(missing_workbooks)
-    if st.button("Run no-cheat benchmark audit", type="primary", disabled=run_disabled):
-        try:
-            with st.spinner("Building accuracy matrix, field coverage, and page consistency checks..."):
-                build_accuracy_package(DATA_DIR)
-                build_workbook(DATA_DIR, WORKBOOK_PATH)
-            st.success("Audit package refreshed.")
-            st.rerun()
-        except Exception as exc:
-            st.error("Audit run failed.")
-            st.exception(exc)
-with button_cols[1]:
-    if st.button("Build Excel export", disabled=not TABLES_PATH.exists()):
-        try:
-            build_workbook(DATA_DIR, WORKBOOK_PATH)
-            st.success("Excel workbook generated.")
-            st.rerun()
-        except Exception as exc:
-            st.error("Excel export failed.")
-            st.exception(exc)
-with button_cols[2]:
-    _download_excel()
+st.subheader("Section B - Source Review Carrier")
+st.caption(
+    "This section carries the methodology term map, PDF evidence review, and missing-document recommendations."
+)
 
-tables = _load_tables()
-if not tables:
-    st.info("No audit tables are available yet. Run the benchmark audit once local workbooks are available.")
+control_cols = st.columns([1.2, 1.5, 0.8, 0.9])
+with control_cols[0]:
+    default_method = st.session_state.get("methodology_id", AUDIT_METHODOLOGIES[0])
+    methodology_id = st.selectbox(
+        "Methodology",
+        AUDIT_METHODOLOGIES,
+        index=AUDIT_METHODOLOGIES.index(default_method) if default_method in AUDIT_METHODOLOGIES else 0,
+    )
+with control_cols[1]:
+    issuer_name = st.text_input("Issuer name", value=str(st.session_state.get("issuer_name", "") or ""))
+with control_cols[2]:
+    analysis_year = st.text_input("Fiscal / analysis year", value=str(st.session_state.get("analysis_year", "") or ""))
+with control_cols[3]:
+    target_limit = st.number_input("Field limit", min_value=5, max_value=80, value=25, step=5)
+
+st.session_state["methodology_id"] = methodology_id
+if issuer_name:
+    st.session_state["issuer_name"] = issuer_name
+if analysis_year:
+    st.session_state["analysis_year"] = analysis_year
+
+status_cols = st.columns(2)
+with status_cols[0]:
+    _status_badge("Perplexity/PUBFIN source discovery", bool(perplexity_key), "PUBFIN_API_KEY")
+with status_cols[1]:
+    _status_badge("LlamaCloud PDF parsing", bool(llama_key), "LLAMA_CLOUD_API_KEY")
+
+_render_deploy_sanity_check(perplexity_key, llama_key)
+
+term_matrix = build_section_b_term_matrix(methodology_id, max_fields=int(target_limit))
+st.session_state["section_b_term_matrix"] = term_matrix
+
+if term_matrix.empty:
+    st.warning("No Section B field terms are available for the selected methodology.")
     st.stop()
 
-summary = tables.get("summary", pd.DataFrame())
-accuracy = tables.get("accuracy_matrix", pd.DataFrame())
-coverage = tables.get("field_coverage", pd.DataFrame())
-page_consistency = tables.get("page_consistency", pd.DataFrame())
-primary_raw = tables.get("primary_raw_inputs", pd.DataFrame())
-source_quality = tables.get("source_quality", pd.DataFrame())
+metric_cols = st.columns(4)
+metric_cols[0].metric("Fields", len(term_matrix))
+metric_cols[1].metric(
+    "ACFR-linked",
+    int(term_matrix["expected_documents"].fillna("").astype(str).str.contains("ACFR", case=False).sum()),
+)
+metric_cols[2].metric(
+    "OS/debt-linked",
+    int(term_matrix["expected_documents"].fillna("").astype(str).str.contains("official statement|debt", case=False, regex=True).sum()),
+)
+metric_cols[3].metric(
+    "Review blockers",
+    int(pd.to_numeric(term_matrix.get("audit_field_blocking", 0), errors="coerce").fillna(0).gt(0).sum()),
+)
 
-st.session_state["audit_accuracy_matrix"] = accuracy
-st.session_state["audit_field_coverage"] = coverage
-
-metric_cols = st.columns(5)
-metric_cols[0].metric("Cases", len(summary))
-metric_cols[1].metric("Accuracy Rows", len(accuracy))
-metric_cols[2].metric("Blocking Metrics", _truthy_count(accuracy, "blocking"))
-metric_cols[3].metric("Missing Fields", _metric_count(coverage, "coverage_status", "missing_primary_raw"))
-metric_cols[4].metric("Page Checks", len(page_consistency))
-
-tabs = st.tabs([
-    "Overview",
-    "Accuracy Matrix",
-    "Field Coverage",
-    "Page Consistency",
-    "Raw Inputs",
-    "Exports",
-])
+tabs = st.tabs(["Terms & Files", "Uploaded Evidence", "Recommended Links", "Review Candidates"])
 
 with tabs[0]:
-    st.subheader("Case Summary")
-    summary_cols = [
-        "fixture_key",
-        "methodology_id",
-        "issuer_name",
-        "primary_raw_sheet",
-        "raw_status",
-        "primary_input_fields",
-        "value_matches",
-        "value_mismatches",
-        "model_missing",
-        "manual_skips",
-        "model_rating",
-        "official_rating",
-        "notes",
+    st.subheader("Methodology Terms And Expected Files")
+    st.caption("These rows come from the methodology template, formula library, data dictionary, and source priority config.")
+    display_cols = [
+        "field_name",
+        "field_category",
+        "formula_ids",
+        "metrics",
+        "expected_documents",
+        "priority_sources",
+        "local_concept_terms",
+        "audit_field_blocking",
+        "audit_coverage_statuses",
     ]
     st.dataframe(
-        clean_for_display(summary[[col for col in summary_cols if col in summary.columns]]),
+        clean_for_display(term_matrix[[col for col in display_cols if col in term_matrix.columns]]),
         width="stretch",
         hide_index=True,
     )
+    _download_csv("Download term matrix", term_matrix, "section_b_term_matrix.csv")
 
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.write("Value status")
-        st.dataframe(clean_for_display(_status_table(accuracy, "value_status")), width="stretch", hide_index=True)
-    with c2:
-        st.write("Field coverage")
-        st.dataframe(clean_for_display(_status_table(coverage, "coverage_status")), width="stretch", hide_index=True)
-    with c3:
-        st.write("Page consistency")
+with tabs[1]:
+    st.subheader("Uploaded ACFR / OH / OS Evidence")
+    st.caption(
+        "Upload issuer ACFR/audited financial statements and OH/OS/debt PDFs. LlamaCloud is used first when configured; "
+        "local pypdf extraction is used as fallback."
+    )
+    upload_cols = st.columns(2)
+    with upload_cols[0]:
+        acfr_files = st.file_uploader(
+            "ACFR / audited financial statements PDF",
+            type=["pdf"],
+            accept_multiple_files=True,
+            key=f"section_b_acfr_upload_{methodology_id}",
+        )
+    with upload_cols[1]:
+        os_files = st.file_uploader(
+            "OH / OS / debt support PDF",
+            type=["pdf"],
+            accept_multiple_files=True,
+            key=f"section_b_os_upload_{methodology_id}",
+        )
+
+    payloads = [
+        *_uploaded_payloads(acfr_files, source_name="ACFR", source_slot="section_b_acfr"),
+        *_uploaded_payloads(os_files, source_name="OS", source_slot="section_b_os"),
+    ]
+    st.session_state["section_b_uploaded_pdf_payloads"] = payloads
+
+    run_disabled = not payloads
+    cache = _parse_cache()
+    run_cols = st.columns([0.9, 1.1, 1.1, 1.4])
+    with run_cols[0]:
+        max_pages = st.number_input("Max pages / PDF", min_value=5, max_value=250, value=60, step=5)
+    with run_cols[1]:
+        snippets_per_field = st.number_input("Snippets / field", min_value=1, max_value=8, value=3, step=1)
+    with run_cols[2]:
+        st.metric("Parse cache", len(cache))
+        if st.button("Clear PDF parse cache", disabled=not bool(cache)):
+            st.session_state["section_b_pdf_parse_cache"] = {}
+            st.success("PDF parse cache cleared.")
+            st.rerun()
+    with run_cols[3]:
+        if st.button("Run Section B PDF audit", type="primary", disabled=run_disabled):
+            documents = uploaded_pdf_documents_from_payloads(payloads)
+            with st.spinner("Parsing PDFs and ranking methodology evidence..."):
+                result = build_section_b_pdf_audit(
+                    documents,
+                    term_matrix,
+                    llama_api_key=llama_key or None,
+                    max_pages=int(max_pages),
+                    top_n_per_field=int(snippets_per_field),
+                    page_cache=cache,
+                )
+            _store_pdf_audit(result)
+            st.success("Section B PDF evidence refreshed.")
+
+    if run_disabled:
+        st.info("No ACFR/OH/OS PDFs uploaded yet. Use Recommended Links to find likely source documents.")
+
+    pages = st.session_state.get("section_b_pdf_pages", pd.DataFrame())
+    evidence = st.session_state.get("section_b_pdf_evidence", pd.DataFrame())
+    if isinstance(pages, pd.DataFrame) and not pages.empty:
+        with st.expander("PDF parse status", expanded=False):
+            parse_cols = ["file_name", "page_number", "extraction_status", "parser", "cache_status", "error"]
+            st.dataframe(clean_for_display(pages[[col for col in parse_cols if col in pages.columns]]), width="stretch", hide_index=True)
+    if isinstance(evidence, pd.DataFrame) and not evidence.empty:
+        evidence_cols = [
+            "field_name",
+            "source_name",
+            "file_name",
+            "page_number",
+            "score",
+            "matched_terms",
+            "candidate_values",
+            "citation",
+            "snippet",
+        ]
         st.dataframe(
-            clean_for_display(_status_table(page_consistency, "candidate_status")),
+            clean_for_display(evidence[[col for col in evidence_cols if col in evidence.columns]]),
             width="stretch",
             hide_index=True,
         )
-
-    blocking = accuracy[
-        accuracy.get("blocking", pd.Series(dtype=object)).fillna(False).astype(str).str.lower().eq("true")
-    ].copy() if not accuracy.empty else pd.DataFrame()
-    st.subheader("Blocking Issues")
-    blocking_cols = [
-        "fixture_key",
-        "methodology_id",
-        "factor",
-        "metric",
-        "formula_id",
-        "official_value",
-        "model_compare_value",
-        "value_status",
-        "missing_fields",
-        "suspected_cause",
-    ]
-    st.dataframe(
-        clean_for_display(blocking[[col for col in blocking_cols if col in blocking.columns]]),
-        width="stretch",
-        hide_index=True,
-    )
-
-with tabs[1]:
-    st.subheader("Methodology Accuracy Matrix")
-    filtered = _apply_common_filters(accuracy, key_prefix="accuracy")
-    blocking_only = st.checkbox("Blocking only", value=False, key="accuracy_blocking_only")
-    if blocking_only and "blocking" in filtered.columns:
-        filtered = filtered[filtered["blocking"].fillna(False).astype(str).str.lower().eq("true")]
-    display_cols = [
-        "fixture_key",
-        "methodology_id",
-        "issuer_name",
-        "factor",
-        "metric",
-        "formula_id",
-        "official_weight",
-        "official_value",
-        "model_compare_value",
-        "value_delta",
-        "value_status",
-        "official_score",
-        "model_score",
-        "score_delta",
-        "score_match",
-        "blocking",
-        "missing_fields",
-        "suspected_cause",
-    ]
-    st.dataframe(
-        clean_for_display(filtered[[col for col in display_cols if col in filtered.columns]]),
-        width="stretch",
-        hide_index=True,
-    )
-    _download_csv("Download filtered accuracy matrix", filtered, "accuracy_matrix_filtered.csv")
+        _download_csv("Download PDF evidence", evidence, "section_b_pdf_evidence.csv")
+    elif isinstance(pages, pd.DataFrame) and not pages.empty:
+        st.warning("PDFs were parsed, but no term-matched evidence snippets were found.")
 
 with tabs[2]:
-    st.subheader("Field Coverage Matrix")
-    filtered = _apply_common_filters(coverage, key_prefix="coverage")
-    field_blocking_only = st.checkbox("Blocking fields only", value=False, key="coverage_blocking_only")
-    if field_blocking_only and "field_blocking" in filtered.columns:
-        filtered = filtered[filtered["field_blocking"].fillna(False).astype(str).str.lower().eq("true")]
-    display_cols = [
-        "fixture_key",
-        "methodology_id",
-        "formula_id",
-        "metric",
-        "formula_value_status",
-        "field_name",
-        "field_category",
-        "coverage_status",
-        "primary_value",
-        "source_sheet",
-        "source_cell",
-        "source_label",
-        "source_type",
-        "no_cheat_allowed",
-        "preferred_source",
-        "fallback_source",
-        "likely_sources",
-        "other_page_candidate_statuses",
-        "other_page_evidence_sheets",
-        "other_page_official_match",
-        "field_blocking",
-        "suspected_cause",
-    ]
-    st.dataframe(
-        clean_for_display(filtered[[col for col in display_cols if col in filtered.columns]]),
-        width="stretch",
-        hide_index=True,
-    )
+    st.subheader("Recommended Source Links")
+    if payloads:
+        st.caption("Recommendations are still useful when uploaded PDFs do not cover every target field.")
+    else:
+        st.caption("Because no PDFs are uploaded, this is the fallback path: Perplexity searches for official download links.")
 
-    if not coverage.empty:
-        grouped = (
-            coverage.groupby(["methodology_id", "coverage_status"], dropna=False)
-            .size()
-            .reset_index(name="field_count")
-            .sort_values(["methodology_id", "coverage_status"])
-        )
-        with st.expander("Coverage summary by methodology", expanded=False):
-            st.dataframe(clean_for_display(grouped), width="stretch", hide_index=True)
-    _download_csv("Download field coverage matrix", filtered, "field_coverage_filtered.csv")
+    if st.button("Find official links with Perplexity", disabled=not bool(perplexity_key)):
+        with st.spinner("Searching for ACFR/OH/OS and related source documents..."):
+            result = perplexity_source_recommendations(
+                issuer_name=issuer_name,
+                analysis_year=analysis_year,
+                targets=term_matrix,
+                api_key=perplexity_key,
+            )
+        status = result["status"]
+        if status.ok:
+            _store_recommendations(result["recommendations"])
+            st.success("Recommended links refreshed.")
+        else:
+            st.warning(f"Perplexity search failed: {status.status}")
+            if status.detail:
+                st.caption(status.detail)
+
+    if not perplexity_key:
+        st.info("Add `PUBFIN_API_KEY` in Streamlit secrets to enable Perplexity source discovery.")
+    recommendations = st.session_state.get("section_b_recommended_links", pd.DataFrame())
+    recommendations = recommendations if isinstance(recommendations, pd.DataFrame) else pd.DataFrame()
+    _display_recommendations(recommendations)
+    link_candidates = st.session_state.get("section_b_recommended_link_candidates")
+    if isinstance(recommendations, pd.DataFrame) and not recommendations.empty:
+        if not isinstance(link_candidates, pd.DataFrame) or link_candidates.empty:
+            link_candidates = recommendations_to_source_candidates(recommendations)
+            st.session_state["section_b_recommended_link_candidates"] = link_candidates
+        if isinstance(link_candidates, pd.DataFrame) and not link_candidates.empty:
+            st.caption("Recommended links can be sent as document-pending rows. They are reminders to download/upload documents, not scoring inputs.")
+            if st.button("Send recommended links to Review & Adjust queue"):
+                added = _send_candidates_to_review(link_candidates)
+                st.success(f"Sent {added} recommended-link candidates to Review & Adjust.")
+            with st.expander("Recommended-link candidates", expanded=False):
+                link_cols = [
+                    "field_name",
+                    "source_name",
+                    "source_file",
+                    "source_table",
+                    "candidate_status",
+                    "notes",
+                ]
+                st.dataframe(
+                    clean_for_display(link_candidates[[col for col in link_cols if col in link_candidates.columns]]),
+                    width="stretch",
+                    hide_index=True,
+                )
 
 with tabs[3]:
-    st.subheader("Workbook Page Consistency")
-    filtered = _apply_common_filters(page_consistency, key_prefix="page")
-    mismatches_only = st.checkbox("Mismatches only", value=False, key="page_mismatches_only")
-    if mismatches_only and "candidate_status" in filtered.columns:
-        filtered = filtered[filtered["candidate_status"].fillna("").astype(str).str.contains("mismatch", case=False)]
-    display_cols = [
-        "fixture_key",
-        "methodology_id",
-        "issuer_name",
-        "sheet_name",
-        "field_name",
-        "matched_label",
-        "candidate_cell",
-        "candidate_value",
-        "primary_value",
-        "delta_to_primary",
-        "official_value",
-        "delta_to_official",
-        "official_match",
-        "candidate_status",
-        "notes",
-    ]
-    st.dataframe(
-        clean_for_display(filtered[[col for col in display_cols if col in filtered.columns]]),
-        width="stretch",
-        hide_index=True,
+    st.subheader("Review-Only Source Candidates")
+    st.caption(
+        "These candidates are not fed into scoring automatically. They are marked source_review and should be confirmed in Data Confirmation first."
     )
-    _download_csv("Download page consistency", filtered, "page_consistency_filtered.csv")
-
-with tabs[4]:
-    st.subheader("Primary Raw Inputs")
-    raw_cols = [
-        "test_case",
-        "methodology_id",
-        "issuer_name",
-        "field_name",
-        "value",
-        "source_workbook",
-        "source_sheet",
-        "source_cell",
-        "source_label",
-        "source_type",
-        "notes",
-    ]
-    st.dataframe(
-        clean_for_display(primary_raw[[col for col in raw_cols if col in primary_raw.columns]]),
-        width="stretch",
-        hide_index=True,
-    )
-
-    st.subheader("Source Quality")
-    st.dataframe(clean_for_display(source_quality), width="stretch", hide_index=True)
-
-with tabs[5]:
-    st.subheader("Downloads")
-    export_cols = st.columns(2)
-    with export_cols[0]:
-        _download_excel()
-        _download_csv("Download summary.csv", summary, "summary.csv")
-        _download_csv("Download accuracy_matrix.csv", accuracy, "accuracy_matrix.csv")
-    with export_cols[1]:
-        _download_csv("Download field_coverage.csv", coverage, "field_coverage.csv")
-        _download_csv("Download page_consistency.csv", page_consistency, "page_consistency.csv")
-        _download_csv("Download primary_raw_inputs.csv", primary_raw, "primary_raw_inputs.csv")
+    candidates = st.session_state.get("section_b_source_candidates", pd.DataFrame())
+    if isinstance(candidates, pd.DataFrame) and not candidates.empty:
+        action_cols = st.columns([1, 2])
+        with action_cols[0]:
+            if st.button("Send to Review & Adjust queue"):
+                added = _send_candidates_to_review(candidates)
+                st.success(f"Sent {added} new/updated candidates to Review & Adjust.")
+        with action_cols[1]:
+            try:
+                st.page_link("pages/0_Data_Confirmation.py", label="Open Review & Adjust")
+            except Exception:
+                st.caption("Open Review & Adjust from the sidebar to confirm these candidates.")
+        candidate_cols = [
+            "field_name",
+            "value",
+            "source_name",
+            "confidence",
+            "source_file",
+            "source_table",
+            "source_cell_or_api",
+            "source_label",
+            "candidate_status",
+            "notes",
+        ]
+        st.dataframe(
+            clean_for_display(candidates[[col for col in candidate_cols if col in candidates.columns]]),
+            width="stretch",
+            hide_index=True,
+        )
+        _download_csv("Download review candidates", candidates, "section_b_review_candidates.csv")
+    else:
+        st.info("Run the PDF audit to generate review-only candidates from uploaded documents.")

@@ -8,3 +8,4 @@ openai
 python-dotenv
 pypdf
 cryptography
+llama-cloud

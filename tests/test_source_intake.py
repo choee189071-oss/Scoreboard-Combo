@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import tempfile
 import unittest
 
 import pandas as pd
@@ -20,8 +21,169 @@ from engine.source_intake import (
 
 class SourceIntakeTests(unittest.TestCase):
     def test_top_blocking_fields_and_mismatch_review_build(self) -> None:
-        top_fields = build_top_blocking_fields(top_n=10)
-        mismatch_review = build_formula_mismatch_review()
+        blocking_rows = pd.DataFrame(
+            [
+                {
+                    "fixture_key": "case_a",
+                    "methodology_id": "moodys_ccd_go",
+                    "field_name": field_name,
+                    "formula_id": formula_id,
+                    "metric": metric,
+                    "coverage_status": "missing_primary_raw",
+                    "suspected_cause": "fixture_source_gap",
+                    "field_blocking": True,
+                    "metric_blocking": True,
+                }
+                for field_name, formula_id, metric in [
+                    ("county_gdp", "gdp_per_capita", "GDP Per Capita"),
+                    ("personal_income", "income_per_capita", "Income Per Capita"),
+                    ("population_current", "population_growth", "Population Growth"),
+                    ("cash_and_investments", "cash_to_debt", "Cash to Debt"),
+                    ("debt_service", "fixed_costs", "Fixed Costs"),
+                    ("net_direct_debt", "debt_per_capita", "Debt Per Capita"),
+                ]
+            ]
+        )
+        mismatch_rows = pd.DataFrame(
+            [
+                {
+                    "fixture_key": "case_a",
+                    "methodology_id": "moodys_ccd_go",
+                    "issuer_name": "Fixture Issuer",
+                    "formula_id": "fund_balance_trend_5yr",
+                    "factor": "Finances",
+                    "metric": "Fund Balance Trend",
+                    "official_value": 0.25,
+                    "model_compare_value": 0.15,
+                    "value_delta": -0.10,
+                    "official_score": 1,
+                    "model_score": 2,
+                    "score_delta": 1,
+                    "required_fields": "fund_balance_ratio_current;fund_balance_ratio_5yr_prior",
+                    "raw_source_cells": "",
+                    "warning": "current-year scalar proxy",
+                    "suspected_cause": "period mismatch",
+                    "workbook": "fixture.xlsx",
+                    "primary_raw_sheet": "Raw",
+                    "value_status": "mismatch",
+                },
+                {
+                    "fixture_key": "case_a",
+                    "methodology_id": "moodys_ccd_go",
+                    "issuer_name": "Fixture Issuer",
+                    "formula_id": "tax_base_size",
+                    "factor": "Economy",
+                    "metric": "Tax Base Size",
+                    "official_value": 1000,
+                    "model_compare_value": 1,
+                    "value_delta": -999,
+                    "official_score": 1,
+                    "model_score": 2,
+                    "score_delta": 1,
+                    "required_fields": "full_value",
+                    "raw_source_cells": "",
+                    "warning": "",
+                    "suspected_cause": "unit mismatch",
+                    "workbook": "fixture.xlsx",
+                    "primary_raw_sheet": "Raw",
+                    "value_status": "mismatch",
+                },
+                {
+                    "fixture_key": "case_a",
+                    "methodology_id": "moodys_ccd_go",
+                    "issuer_name": "Fixture Issuer",
+                    "formula_id": "net_direct_debt_per_capita",
+                    "factor": "Debt",
+                    "metric": "Debt Per Capita",
+                    "official_value": 200,
+                    "model_compare_value": 240,
+                    "value_delta": 40,
+                    "official_score": 2,
+                    "model_score": 3,
+                    "score_delta": 1,
+                    "required_fields": "net_direct_debt;population_current",
+                    "raw_source_cells": "",
+                    "warning": "",
+                    "suspected_cause": "denominator mismatch",
+                    "workbook": "fixture.xlsx",
+                    "primary_raw_sheet": "Raw",
+                    "value_status": "mismatch",
+                },
+                {
+                    "fixture_key": "case_a",
+                    "methodology_id": "moodys_ccd_go",
+                    "issuer_name": "Fixture Issuer",
+                    "formula_id": "cash_balance_ratio",
+                    "factor": "Liquidity",
+                    "metric": "Cash Balance",
+                    "official_value": 0.5,
+                    "model_compare_value": 0.7,
+                    "value_delta": 0.2,
+                    "official_score": 2,
+                    "model_score": 3,
+                    "score_delta": 1,
+                    "required_fields": "cash;revenue",
+                    "raw_source_cells": "",
+                    "warning": "",
+                    "suspected_cause": "source adjustment",
+                    "workbook": "fixture.xlsx",
+                    "primary_raw_sheet": "Raw",
+                    "value_status": "mismatch",
+                },
+                {
+                    "fixture_key": "case_a",
+                    "methodology_id": "moodys_ccd_go",
+                    "issuer_name": "Fixture Issuer",
+                    "formula_id": "debt_to_revenue",
+                    "factor": "Debt",
+                    "metric": "Debt to Revenue",
+                    "official_value": 0.4,
+                    "model_compare_value": 0.6,
+                    "value_delta": 0.2,
+                    "official_score": 2,
+                    "model_score": 3,
+                    "score_delta": 1,
+                    "required_fields": "debt;revenue",
+                    "raw_source_cells": "",
+                    "warning": "",
+                    "suspected_cause": "source adjustment",
+                    "workbook": "fixture.xlsx",
+                    "primary_raw_sheet": "Raw",
+                    "value_status": "mismatch",
+                },
+                {
+                    "fixture_key": "case_a",
+                    "methodology_id": "moodys_ccd_go",
+                    "issuer_name": "Fixture Issuer",
+                    "formula_id": "other_formula",
+                    "factor": "Other",
+                    "metric": "Other Metric",
+                    "official_value": 10,
+                    "model_compare_value": 12,
+                    "value_delta": 2,
+                    "official_score": 2,
+                    "model_score": 3,
+                    "score_delta": 1,
+                    "required_fields": "other_field",
+                    "raw_source_cells": "",
+                    "warning": "",
+                    "suspected_cause": "formula review",
+                    "workbook": "fixture.xlsx",
+                    "primary_raw_sheet": "Raw",
+                    "value_status": "mismatch",
+                },
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            coverage_path = temp_path / "field_coverage.csv"
+            accuracy_path = temp_path / "accuracy_matrix.csv"
+            blocking_rows.to_csv(coverage_path, index=False)
+            mismatch_rows.to_csv(accuracy_path, index=False)
+
+            top_fields = build_top_blocking_fields(coverage_path, top_n=10)
+            mismatch_review = build_formula_mismatch_review(accuracy_path)
 
         self.assertGreaterEqual(len(top_fields), 5)
         self.assertIn("field_name", top_fields.columns)

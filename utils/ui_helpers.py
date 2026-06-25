@@ -9,7 +9,7 @@ import streamlit as st
 WORKFLOW_STEPS: List[Tuple[str, str, str]] = [
     ("workflow", "1", "Workflow"),
     ("data_confirmation", "2", "Review & Adjust"),
-    ("audit_platform", "3", "Audit & Advanced"),
+    ("audit_platform", "3", "Review & Audit"),
 ]
 
 APP_NAME = "Scoreboard Combo"
@@ -17,7 +17,7 @@ BUILD_LABEL = "main-nav-v2"
 PAGE_LINKS: Dict[str, Tuple[str, str]] = {
     "workflow": ("streamlit_app.py", "Workflow"),
     "data_confirmation": ("pages/0_Data_Confirmation.py", "Review & Adjust"),
-    "audit_platform": ("pages/2_Audit_Platform.py", "Audit & Advanced"),
+    "audit_platform": ("pages/2_Audit_Platform.py", "Review & Audit"),
 }
 ADVANCED_PAGE_LINKS: Dict[str, Tuple[str, str]] = {
     "source_intake": ("pages/4_Source_Intake.py", "Source Intake Lab"),
