@@ -7,9 +7,11 @@ import pandas as pd
 
 from engine.acfr_extraction_engine import PdfDocument
 from engine.ai_audit_pipeline import (
+    build_formula_input_comparable_table,
     build_deploy_sanity_check,
     build_section_b_pdf_audit,
     build_section_b_term_matrix,
+    formula_input_overrides_to_source_candidates,
     parse_pdf_documents,
     perplexity_search_recommendations,
     perplexity_source_recommendations,
@@ -55,6 +57,62 @@ class AiAuditPipelineTests(unittest.TestCase):
         self.assertTrue(
             matrix["expected_documents"].astype(str).str.contains("ACFR|CreditScope|Census|BEA", regex=True).any()
         )
+
+    def test_formula_input_comparable_table_includes_workflow_and_candidate_values(self) -> None:
+        table = build_formula_input_comparable_table(
+            "moodys_ccd_go",
+            issuer_data={"cash": 123},
+            source_candidates=pd.DataFrame(
+                [
+                    {
+                        "field_name": "revenue",
+                        "value": 456,
+                        "source_name": "ACFR",
+                        "candidate_status": "ready",
+                        "confidence": 0.9,
+                    }
+                ]
+            ),
+        )
+
+        self.assertIn("cash", set(table["field_name"]))
+        self.assertIn("revenue", set(table["field_name"]))
+        cash = table[table["field_name"].eq("cash")].iloc[0]
+        revenue = table[table["field_name"].eq("revenue")].iloc[0]
+        self.assertEqual(cash["input_status"], "ready")
+        self.assertEqual(cash["current_value"], 123)
+        self.assertEqual(revenue["input_status"], "candidate_available")
+        self.assertEqual(revenue["candidate_value"], 456.0)
+
+    def test_formula_input_overrides_to_source_candidates(self) -> None:
+        edited = pd.DataFrame(
+            [
+                {
+                    "use_manual": True,
+                    "field_name": "cash",
+                    "manual_value": "$1,234",
+                    "manual_source": "Manual",
+                    "metrics": "Cash Balance Ratio",
+                    "manual_note": "Analyst adjustment",
+                },
+                {
+                    "use_manual": False,
+                    "field_name": "revenue",
+                    "manual_value": "999",
+                },
+            ]
+        )
+
+        candidates = formula_input_overrides_to_source_candidates(
+            edited,
+            issuer_name="Example Issuer",
+            analysis_year="2024",
+        )
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates.iloc[0]["field_name"], "cash")
+        self.assertEqual(candidates.iloc[0]["value"], 1234.0)
+        self.assertEqual(candidates.iloc[0]["candidate_status"], "ready")
 
     def test_perplexity_recommendations_parse_json_response(self) -> None:
         targets = pd.DataFrame(

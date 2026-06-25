@@ -12,15 +12,19 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from engine.calculator_engine import calculate_all_formulas
 from engine.ai_audit_pipeline import (
+    build_formula_input_comparable_table,
     build_deploy_sanity_check,
     build_section_b_pdf_audit,
     build_section_b_term_matrix,
+    formula_input_overrides_to_source_candidates,
     perplexity_source_recommendations,
     recommendations_to_source_candidates,
     uploaded_pdf_documents_from_payloads,
 )
 from engine.data_sourcing_engine import normalize_source_candidates
+from engine.factor_engine import load_factor_template
 from engine.methodology_audit import AUDIT_METHODOLOGIES
 from utils.ui_helpers import ADVANCED_PAGE_LINKS, clean_for_display, current_context_card, init_state, page_header
 
@@ -169,6 +173,70 @@ def _send_candidates_to_review(candidates: pd.DataFrame) -> int:
     return max(0, len(combined) - before)
 
 
+def _methodology_formula_results(methodology_id: str, formula_results: pd.DataFrame) -> pd.DataFrame:
+    if not isinstance(formula_results, pd.DataFrame) or formula_results.empty:
+        return pd.DataFrame()
+    try:
+        template = load_factor_template(methodology_id, templates_dir="templates")
+    except Exception:
+        return formula_results.copy()
+    if template.empty or "formula_id" not in template.columns or "formula_id" not in formula_results.columns:
+        return formula_results.copy()
+    ids = set(template["formula_id"].dropna().astype(str))
+    return formula_results[formula_results["formula_id"].astype(str).isin(ids)].copy()
+
+
+def _merge_ready_candidates(existing: Any, candidates: pd.DataFrame) -> pd.DataFrame:
+    if not isinstance(candidates, pd.DataFrame) or candidates.empty:
+        return pd.DataFrame()
+    frames = []
+    if isinstance(existing, pd.DataFrame) and not existing.empty:
+        existing = existing.copy()
+        if "field_name" in existing.columns:
+            edited_fields = set(candidates["field_name"].dropna().astype(str))
+            existing = existing[~existing["field_name"].astype(str).isin(edited_fields)]
+        frames.append(existing)
+    frames.append(candidates)
+    return normalize_source_candidates(pd.concat(frames, ignore_index=True, sort=False))
+
+
+def _apply_formula_input_overrides(edited_inputs: pd.DataFrame, methodology_id: str, issuer_name: str, analysis_year: str) -> pd.DataFrame:
+    candidates = formula_input_overrides_to_source_candidates(
+        edited_inputs,
+        issuer_name=issuer_name,
+        analysis_year=analysis_year,
+    )
+    if candidates.empty:
+        return candidates
+
+    issuer_data = dict(st.session_state.get("issuer_data", {}) or {})
+    for _, row in candidates.iterrows():
+        field = str(row.get("field_name", "") or "").strip()
+        if field:
+            issuer_data[field] = row.get("value")
+
+    formula_results = calculate_all_formulas(issuer_data)
+    st.session_state["issuer_data"] = issuer_data
+    st.session_state["formula_results"] = formula_results
+    st.session_state["methodology_formula_results"] = _methodology_formula_results(methodology_id, formula_results)
+    st.session_state["rating_output"] = None
+    st.session_state["source_saved_needs_formula_run"] = False
+    st.session_state["manual_source_candidates"] = _merge_ready_candidates(
+        st.session_state.get("manual_source_candidates"),
+        candidates,
+    )
+    st.session_state["approved_source_candidates"] = _merge_ready_candidates(
+        st.session_state.get("approved_source_candidates"),
+        candidates,
+    )
+    st.session_state["source_candidates"] = _merge_ready_candidates(
+        st.session_state.get("source_candidates"),
+        candidates,
+    )
+    st.session_state["formula_input_manual_edits"] = candidates
+    return candidates
+
+
 def _parse_cache() -> dict[str, pd.DataFrame]:
     cache = st.session_state.get("section_b_pdf_parse_cache")
     if not isinstance(cache, dict):
@@ -246,9 +314,97 @@ metric_cols[3].metric(
     int(pd.to_numeric(term_matrix.get("audit_field_blocking", 0), errors="coerce").fillna(0).gt(0).sum()),
 )
 
-tabs = st.tabs(["Terms & Files", "Uploaded Evidence", "Recommended Links", "Review Candidates"])
+tabs = st.tabs(["Formula Inputs", "Terms & Files", "Uploaded Evidence", "Recommended Links", "Review Candidates"])
 
 with tabs[0]:
+    st.subheader("Formula Input Comparable Table")
+    st.caption(
+        "Compare current Workflow issuer_data with available source candidates. Select rows, enter manual values, "
+        "and apply them to rerun formulas."
+    )
+    formula_results_for_inputs = st.session_state.get("methodology_formula_results")
+    if not isinstance(formula_results_for_inputs, pd.DataFrame) or formula_results_for_inputs.empty:
+        formula_results_for_inputs = st.session_state.get("formula_results")
+    input_table = build_formula_input_comparable_table(
+        methodology_id,
+        issuer_data=st.session_state.get("issuer_data", {}) or {},
+        source_report=st.session_state.get("source_report"),
+        source_candidates=st.session_state.get("source_candidates"),
+        approved_source_candidates=st.session_state.get("approved_source_candidates"),
+        formula_results=formula_results_for_inputs,
+    )
+    if input_table.empty:
+        st.info("No formula input fields are available for this methodology.")
+    else:
+        input_metrics = st.columns(4)
+        input_metrics[0].metric("Required Inputs", len(input_table))
+        input_metrics[1].metric("Ready", int(input_table["input_status"].astype(str).eq("ready").sum()))
+        input_metrics[2].metric("Candidate Available", int(input_table["input_status"].astype(str).eq("candidate_available").sum()))
+        input_metrics[3].metric("Missing", int(input_table["input_status"].astype(str).eq("missing").sum()))
+        editor_cols = [
+            "use_manual",
+            "field_name",
+            "input_status",
+            "current_value",
+            "manual_value",
+            "candidate_value",
+            "source_name",
+            "confidence",
+            "formula_ids",
+            "formula_status",
+            "metrics",
+            "priority_sources",
+            "expected_documents",
+            "manual_source",
+            "manual_note",
+        ]
+        edited_inputs = st.data_editor(
+            input_table[[col for col in editor_cols if col in input_table.columns]],
+            key=f"formula_input_comparable_editor_{methodology_id}",
+            width="stretch",
+            hide_index=True,
+            num_rows="fixed",
+            disabled=[
+                "field_name",
+                "input_status",
+                "current_value",
+                "candidate_value",
+                "source_name",
+                "confidence",
+                "formula_ids",
+                "formula_status",
+                "metrics",
+                "priority_sources",
+                "expected_documents",
+            ],
+            column_config={
+                "use_manual": st.column_config.CheckboxColumn("Use manual", help="Apply manual_value to Workflow issuer_data."),
+                "manual_value": st.column_config.TextColumn("Manual value", help="Accepts numbers, $, commas, %, and list-like values."),
+                "manual_source": st.column_config.TextColumn("Manual source"),
+                "manual_note": st.column_config.TextColumn("Manual note"),
+                "current_value": st.column_config.TextColumn("Workflow value"),
+                "candidate_value": st.column_config.TextColumn("Candidate value"),
+            },
+        )
+        action_cols = st.columns([1.2, 1.8])
+        with action_cols[0]:
+            if st.button("Apply selected manual values", type="primary"):
+                applied = _apply_formula_input_overrides(
+                    edited_inputs,
+                    methodology_id,
+                    issuer_name,
+                    analysis_year,
+                )
+                if applied.empty:
+                    st.warning("Select at least one row and enter a manual value.")
+                else:
+                    st.success(f"Applied {len(applied)} manual value(s), updated Workflow issuer_data, and reran formulas.")
+                    st.rerun()
+        with action_cols[1]:
+            st.caption("Manual overrides are saved as ready source candidates and clear stale scoreboard output.")
+        _download_csv("Download formula input table", input_table, "review_audit_formula_inputs.csv")
+
+with tabs[1]:
     st.subheader("Methodology Terms And Expected Files")
     st.caption("These rows come from the methodology template, formula library, data dictionary, and source priority config.")
     display_cols = [
@@ -269,7 +425,7 @@ with tabs[0]:
     )
     _download_csv("Download term matrix", term_matrix, "section_b_term_matrix.csv")
 
-with tabs[1]:
+with tabs[2]:
     st.subheader("Uploaded ACFR / OH / OS Evidence")
     st.caption(
         "Upload issuer ACFR/audited financial statements and OH/OS/debt PDFs. LlamaCloud is used first when configured; "
@@ -355,7 +511,7 @@ with tabs[1]:
     elif isinstance(pages, pd.DataFrame) and not pages.empty:
         st.warning("PDFs were parsed, but no term-matched evidence snippets were found.")
 
-with tabs[2]:
+with tabs[3]:
     st.subheader("Recommended Source Links")
     if payloads:
         st.caption("Recommendations are still useful when uploaded PDFs do not cover every target field.")
@@ -391,9 +547,9 @@ with tabs[2]:
             st.session_state["section_b_recommended_link_candidates"] = link_candidates
         if isinstance(link_candidates, pd.DataFrame) and not link_candidates.empty:
             st.caption("Recommended links can be sent as document-pending rows. They are reminders to download/upload documents, not scoring inputs.")
-            if st.button("Send recommended links to Review & Adjust queue"):
+            if st.button("Send recommended links to source review queue"):
                 added = _send_candidates_to_review(link_candidates)
-                st.success(f"Sent {added} recommended-link candidates to Review & Adjust.")
+                st.success(f"Sent {added} recommended-link candidates to the source review queue.")
             with st.expander("Recommended-link candidates", expanded=False):
                 link_cols = [
                     "field_name",
@@ -409,23 +565,20 @@ with tabs[2]:
                     hide_index=True,
                 )
 
-with tabs[3]:
+with tabs[4]:
     st.subheader("Review-Only Source Candidates")
     st.caption(
-        "These candidates are not fed into scoring automatically. They are marked source_review and should be confirmed in Data Confirmation first."
+        "These candidates are not fed into scoring automatically. They are marked source_review and should be confirmed before model use."
     )
     candidates = st.session_state.get("section_b_source_candidates", pd.DataFrame())
     if isinstance(candidates, pd.DataFrame) and not candidates.empty:
         action_cols = st.columns([1, 2])
         with action_cols[0]:
-            if st.button("Send to Review & Adjust queue"):
+            if st.button("Send to source review queue"):
                 added = _send_candidates_to_review(candidates)
-                st.success(f"Sent {added} new/updated candidates to Review & Adjust.")
+                st.success(f"Sent {added} new/updated candidates to the source review queue.")
         with action_cols[1]:
-            try:
-                st.page_link("pages/0_Data_Confirmation.py", label="Open Review & Adjust")
-            except Exception:
-                st.caption("Open Review & Adjust from the sidebar to confirm these candidates.")
+            st.caption("Use Formula Inputs for direct manual overrides, or inspect queued candidates in Developer Tools.")
         candidate_cols = [
             "field_name",
             "value",

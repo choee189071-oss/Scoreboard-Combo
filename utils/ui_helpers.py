@@ -8,15 +8,13 @@ import streamlit as st
 
 WORKFLOW_STEPS: List[Tuple[str, str, str]] = [
     ("workflow", "1", "Workflow"),
-    ("data_confirmation", "2", "Review & Adjust"),
-    ("audit_platform", "3", "Review & Audit"),
+    ("audit_platform", "2", "Review & Audit"),
 ]
 
 APP_NAME = "Scoreboard Combo"
-BUILD_LABEL = "main-nav-v2"
+BUILD_LABEL = "main-nav-v3"
 PAGE_LINKS: Dict[str, Tuple[str, str]] = {
     "workflow": ("streamlit_app.py", "Workflow"),
-    "data_confirmation": ("pages/0_Data_Confirmation.py", "Review & Adjust"),
     "audit_platform": ("pages/2_Audit_Platform.py", "Review & Audit"),
 }
 ADVANCED_PAGE_LINKS: Dict[str, Tuple[str, str]] = {
@@ -284,7 +282,7 @@ def current_context_card() -> None:
           <span class="cs-pill">{methodology}</span>
           <span class="cs-pill">{issuer}</span>
           <span class="cs-pill">FY {year}</span>
-          <div class="cs-muted" style="margin-top:6px;">This context is shared by Workflow, Review & Adjust, and Audit.</div>
+          <div class="cs-muted" style="margin-top:6px;">This context is shared by Workflow and Review & Audit.</div>
         </div>
         """,
         unsafe_allow_html=True,

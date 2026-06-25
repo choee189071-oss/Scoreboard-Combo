@@ -418,7 +418,7 @@ with st.container(border=True):
             if direct_metric_overrides:
                 st.caption(
                     f"{len(direct_metric_overrides)} workbook direct metric(s) applied to formula inputs. "
-                    "Full debug details are in Audit & Advanced > Developer Tools > Advanced Diagnostics."
+                    "Full debug details are in Review & Audit > Advanced tools > Developer Tools."
                 )
             if not confirmed_formula_inputs.empty:
                 with st.expander("Confirmed inputs applied to formula engine", expanded=True):
@@ -465,7 +465,7 @@ with st.container(border=True):
             if not warning_rows.empty:
                 with st.expander("Formula notes and source warnings", expanded=False):
                     st.caption(
-                        "These notes explain source provenance or review hints. Developer-level direct metric diagnostics live in Audit & Advanced > Developer Tools."
+                        "These notes explain source provenance or review hints. Developer-level direct metric diagnostics live in Review & Audit > Advanced tools > Developer Tools."
                     )
                     note_cols = ["formula_id", "status", "value", "warning"]
                     st.dataframe(
@@ -478,7 +478,7 @@ with st.container(border=True):
             if not diagnostics.empty:
                 st.session_state["local_gov_formula_diagnostics"] = diagnostics
                 st.caption(
-                    "S&P Local Gov formula diagnostics are available in Audit & Advanced > Developer Tools > Advanced Diagnostics."
+                    "S&P Local Gov formula diagnostics are available in Review & Audit > Advanced tools > Developer Tools."
                 )
 
         st.markdown("**Scoreboard**")

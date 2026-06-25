@@ -129,7 +129,7 @@ st.set_page_config(page_title="Source Intake Lab", layout="wide")
 init_state()
 page_header(
     "Source Intake Lab",
-    "Advanced source-candidate tooling. Normal runs should start in Workflow and use Review & Adjust for evidence corrections.",
+    "Advanced source-candidate tooling. Normal runs should start in Workflow and use Review & Audit for evidence corrections.",
     "source_intake",
 )
 current_context_card()

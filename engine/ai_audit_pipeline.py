@@ -25,6 +25,7 @@ from urllib import request as urllib_request
 
 import pandas as pd
 
+from engine.calculator_engine import clean_numeric
 from engine.acfr_extraction_engine import (
     PdfDocument,
     extract_pdf_pages,
@@ -32,7 +33,7 @@ from engine.acfr_extraction_engine import (
     rank_pdf_snippets_for_field,
 )
 from engine.data_platform import build_methodology_field_matrix
-from engine.data_sourcing_engine import CANDIDATE_COLUMNS, normalize_source_candidates
+from engine.data_sourcing_engine import CANDIDATE_COLUMNS, normalize_source_candidates, required_fields_for_methodology
 
 
 PERPLEXITY_SEARCH_URL = "https://api.perplexity.ai/search"
@@ -1003,6 +1004,183 @@ def recommendations_to_source_candidates(recommendations: pd.DataFrame) -> pd.Da
                 }
             )
     return normalize_source_candidates(pd.DataFrame(rows))
+
+
+def _has_value(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, float) and pd.isna(value):
+        return False
+    if isinstance(value, str):
+        return bool(value.strip()) and value.strip().lower() not in {"nan", "none", "<na>"}
+    if isinstance(value, (list, tuple, set)):
+        return any(_has_value(item) for item in value)
+    return True
+
+
+def _display_value(value: Any) -> Any:
+    if not _has_value(value):
+        return ""
+    if isinstance(value, (list, tuple, set)):
+        return " | ".join(_clean_text(item) for item in value if _has_value(item))
+    return value
+
+
+def _source_candidate_lookup(*frames: pd.DataFrame | None) -> dict[str, dict[str, Any]]:
+    lookup: dict[str, dict[str, Any]] = {}
+    ranked_rows: list[dict[str, Any]] = []
+    for frame_rank, frame in enumerate(frames, start=1):
+        if not isinstance(frame, pd.DataFrame) or frame.empty or "field_name" not in frame.columns:
+            continue
+        for _, row in frame.iterrows():
+            field = _clean_text(row.get("field_name", ""))
+            if not field:
+                continue
+            selected = str(row.get("selected", "")).strip().lower() in {"true", "1", "yes"}
+            status = _clean_text(
+                row.get("candidate_status", row.get("readiness_status", row.get("source_quality_status", "")))
+            )
+            confidence = row.get("confidence", row.get("confidence_score", 0))
+            try:
+                confidence_value = float(confidence)
+            except Exception:
+                confidence_value = 0.0
+            ranked_rows.append(
+                {
+                    "field_name": field,
+                    "candidate_value": _display_value(row.get("value", row.get("selected_value", ""))),
+                    "source_name": row.get("source_name", row.get("canonical_source", row.get("source_type", ""))),
+                    "source_detail": row.get("source_detail", status),
+                    "source_file": row.get("source_file", ""),
+                    "source_label": row.get("source_label", row.get("source_cell_or_api", "")),
+                    "candidate_status": status,
+                    "confidence": confidence_value,
+                    "_rank": frame_rank + (10 if selected else 0) + (3 if status == "ready" else 0) + confidence_value,
+                }
+            )
+    for row in sorted(ranked_rows, key=lambda item: item["_rank"], reverse=True):
+        lookup.setdefault(row["field_name"], row)
+    return lookup
+
+
+def _formula_status_lookup(formula_results: pd.DataFrame | None) -> dict[str, str]:
+    if not isinstance(formula_results, pd.DataFrame) or formula_results.empty or "formula_id" not in formula_results.columns:
+        return {}
+    out: dict[str, str] = {}
+    for _, row in formula_results.iterrows():
+        formula_id = _clean_text(row.get("formula_id", ""))
+        if formula_id:
+            out[formula_id] = _clean_text(row.get("status", ""))
+    return out
+
+
+def build_formula_input_comparable_table(
+    methodology_id: str,
+    *,
+    issuer_data: Mapping[str, Any] | None = None,
+    source_report: pd.DataFrame | None = None,
+    source_candidates: pd.DataFrame | None = None,
+    approved_source_candidates: pd.DataFrame | None = None,
+    formula_results: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Build the Review & Audit comparable table for formula input fields."""
+    issuer_data = dict(issuer_data or {})
+    required_fields = required_fields_for_methodology(methodology_id)
+    matrix = build_methodology_field_matrix()
+    if not matrix.empty:
+        matrix = matrix[matrix["methodology_id"].astype(str).eq(str(methodology_id))].copy()
+        matrix = matrix[~matrix["field_name"].astype(str).isin(["manual_score", "no_raw_field_required"])]
+        matrix = matrix.drop_duplicates(subset=["field_name"], keep="first").set_index("field_name")
+    else:
+        matrix = pd.DataFrame()
+
+    candidate_lookup = _source_candidate_lookup(source_candidates, source_report, approved_source_candidates)
+    status_by_formula = _formula_status_lookup(formula_results)
+    rows: list[dict[str, Any]] = []
+    for field in required_fields:
+        meta = matrix.loc[field].to_dict() if not matrix.empty and field in matrix.index else {}
+        formula_ids = _split_pipe(meta.get("formula_ids", field if field in status_by_formula else ""))
+        formula_status = _join_unique(status_by_formula.get(fid, "") for fid in formula_ids)
+        current_value = issuer_data.get(field, "")
+        candidate = candidate_lookup.get(field, {})
+        current_ready = _has_value(current_value)
+        candidate_ready = _has_value(candidate.get("candidate_value", ""))
+        if current_ready:
+            input_status = "ready"
+        elif candidate_ready:
+            input_status = "candidate_available"
+        else:
+            input_status = "missing"
+        rows.append(
+            {
+                "use_manual": False,
+                "field_name": field,
+                "input_status": input_status,
+                "current_value": _display_value(current_value),
+                "manual_value": "",
+                "candidate_value": candidate.get("candidate_value", ""),
+                "source_name": candidate.get("source_name", ""),
+                "source_detail": candidate.get("source_detail", ""),
+                "confidence": candidate.get("confidence", ""),
+                "formula_ids": meta.get("formula_ids", field if field in status_by_formula else ""),
+                "formula_status": formula_status,
+                "metrics": meta.get("metrics", ""),
+                "priority_sources": meta.get("priority_sources", ""),
+                "expected_documents": _expected_documents_from_sources(
+                    meta.get("priority_sources", ""),
+                    meta.get("template_source_priority", ""),
+                    meta.get("preferred_source", ""),
+                    meta.get("fallback_source", ""),
+                ),
+                "manual_source": "Manual",
+                "manual_note": "",
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def formula_input_overrides_to_source_candidates(
+    edited_inputs: pd.DataFrame,
+    *,
+    issuer_name: str = "",
+    analysis_year: str | int = "",
+) -> pd.DataFrame:
+    """Convert checked comparable-table manual values into ready source candidates."""
+    if not isinstance(edited_inputs, pd.DataFrame) or edited_inputs.empty:
+        return pd.DataFrame(columns=CANDIDATE_COLUMNS)
+
+    rows: list[dict[str, Any]] = []
+    for _, row in edited_inputs.iterrows():
+        selected = bool(row.get("use_manual", False))
+        field = _clean_text(row.get("field_name", ""))
+        raw_value = row.get("manual_value", "")
+        value = clean_numeric(raw_value)
+        if not selected or not field or not _has_value(value):
+            continue
+        note_parts = [
+            "Manual formula input override from Review & Audit comparable table.",
+            row.get("manual_note", ""),
+            f"Issuer: {issuer_name}" if _clean_text(issuer_name) else "",
+            f"FY: {analysis_year}" if _clean_text(analysis_year) else "",
+        ]
+        rows.append(
+            {
+                "field_name": field,
+                "value": value,
+                "unit": "",
+                "source_name": _clean_text(row.get("manual_source", "")) or "Manual",
+                "source_type": "Manual",
+                "source_detail": "review_audit_formula_input_override",
+                "confidence": 0.75,
+                "source_file": "",
+                "source_table": "Review & Audit Formula Inputs",
+                "source_cell_or_api": "manual_value",
+                "source_label": _clean_text(row.get("metrics", "")),
+                "candidate_status": "ready",
+                "notes": _join_unique(note_parts, sep=" "),
+            }
+        )
+    return normalize_source_candidates(pd.DataFrame(rows)) if rows else pd.DataFrame(columns=CANDIDATE_COLUMNS)
 
 
 def build_section_b_pdf_audit(
