@@ -314,9 +314,9 @@ metric_cols[3].metric(
     int(pd.to_numeric(term_matrix.get("audit_field_blocking", 0), errors="coerce").fillna(0).gt(0).sum()),
 )
 
-tabs = st.tabs(["Formula Inputs", "Terms & Files", "Uploaded Evidence", "Recommended Links", "Review Candidates"])
+tabs = st.tabs(["Upload & Links", "Review Candidates", "Formula Inputs", "Terms & Files"])
 
-with tabs[0]:
+with tabs[2]:
     st.subheader("Formula Input Comparable Table")
     st.caption(
         "Compare current Workflow issuer_data with available source candidates. Select rows, enter manual values, "
@@ -404,7 +404,7 @@ with tabs[0]:
             st.caption("Manual overrides are saved as ready source candidates and clear stale scoreboard output.")
         _download_csv("Download formula input table", input_table, "review_audit_formula_inputs.csv")
 
-with tabs[1]:
+with tabs[3]:
     st.subheader("Methodology Terms And Expected Files")
     st.caption("These rows come from the methodology template, formula library, data dictionary, and source priority config.")
     display_cols = [
@@ -425,7 +425,7 @@ with tabs[1]:
     )
     _download_csv("Download term matrix", term_matrix, "section_b_term_matrix.csv")
 
-with tabs[2]:
+with tabs[0]:
     st.subheader("Uploaded ACFR / OH / OS Evidence")
     st.caption(
         "Upload issuer ACFR/audited financial statements and OH/OS/debt PDFs. LlamaCloud is used first when configured; "
@@ -511,7 +511,8 @@ with tabs[2]:
     elif isinstance(pages, pd.DataFrame) and not pages.empty:
         st.warning("PDFs were parsed, but no term-matched evidence snippets were found.")
 
-with tabs[3]:
+with tabs[0]:
+    st.divider()
     st.subheader("Recommended Source Links")
     if payloads:
         st.caption("Recommendations are still useful when uploaded PDFs do not cover every target field.")
@@ -565,7 +566,7 @@ with tabs[3]:
                     hide_index=True,
                 )
 
-with tabs[4]:
+with tabs[1]:
     st.subheader("Review-Only Source Candidates")
     st.caption(
         "These candidates are not fed into scoring automatically. They are marked source_review and should be confirmed before model use."
